@@ -1,8 +1,9 @@
 #!/bin/bash
-# Submit the ATP-binding experiment matrix to Slurm, one GPU job per run:
+# Submit the nucleotide-binding experiment matrix to Slurm, one GPU job per run:
 #
-#     alphabet (GADVP, GADVPSELT, GADVPSELTRIQN, ALL20)
-#   x cation   (none -> ligand ATP;  MG -> ligand ATP,MG;  MN, CA, ... also work)
+#     nucleotide (ATP, GTP)
+#   x alphabet   (GADVP, GADVPSELT, GADVPSELTRIQN, ALL20)
+#   x cation     (none -> ligand NUC;  MG -> ligand NUC,MG;  MN, CA, ... also work)
 #   x replicate
 #
 # Prints the plan and exits unless --submit is given.
@@ -11,12 +12,14 @@
 #   ENV_ACTIVATE='conda activate ames' ./submit_matrix.sh --submit
 #   SMOKE=1 ENV_ACTIVATE=... ./submit_matrix.sh --submit             # tiny test run
 #   CONTROL=neutral ... ./submit_matrix.sh --submit                  # no-selection null
+#   NUCLEOTIDES=GTP ...                                              # one nucleotide only
 #
 # Settings (environment variables, defaults in brackets)
 #   ENV_ACTIVATE  command that activates the env with ames + esm       [required]
-#   OUTROOT       output root                                          [outputs/atp_matrix]
+#   OUTROOT       output root                                          [outputs/nuc_matrix]
+#   NUCLEOTIDES   ATP and/or GTP (what summarize_matrix.py supports)   [ATP GTP]
 #   ALPHABETS     space-separated                                      [GADVP GADVPSELT GADVPSELTRIQN ALL20]
-#   CATIONS       "none" = ATP only, otherwise CCD code of the ion     [none MG]
+#   CATIONS       "none" = nucleotide only, otherwise CCD code of ion  [none MG]
 #   REPS          replicates per condition                             [3]
 #   PS NG         population size, generations                         [100 1000]
 #   LEN0 MAXLEN   starting / maximum chain length                      [65 160]
@@ -24,7 +27,7 @@
 #   BETA0 BETAT   selection strength at start / after annealing        [0.8 8.0]
 #   ANN_S ANN_E   annealing window (generations)                       [0.15*NG, NG-1]
 #   CONTROL       none | neutral (beta=0, no annealing: mutation +     [none]
-#                 drift only, the null distribution for ATP scores)
+#                 drift only, the null distribution for binding scores)
 #   SMOKE         1 = PS=8 NG=4, 30 min walltime, outputs to $OUTROOT_smoke
 #   Slurm: PARTITION GRES TIME MEM CPUS ACCOUNT MODULES (check sinfo / MSI docs)
 set -euo pipefail
@@ -35,7 +38,8 @@ SUBMIT=0
 : "${ENV_ACTIVATE:?set ENV_ACTIVATE, e.g. ENV_ACTIVATE='conda activate ames'}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-OUTROOT="${OUTROOT:-outputs/atp_matrix}"
+OUTROOT="${OUTROOT:-outputs/nuc_matrix}"
+NUCLEOTIDES="${NUCLEOTIDES:-ATP GTP}"
 ALPHABETS="${ALPHABETS:-GADVP GADVPSELT GADVPSELTRIQN ALL20}"
 CATIONS="${CATIONS:-none MG}"
 REPS="${REPS:-3}"
@@ -57,6 +61,10 @@ CPUS="${CPUS:-8}"
 ACCOUNT="${ACCOUNT:-}"
 MODULES="${MODULES:-}"
 
+for nuc in $NUCLEOTIDES; do
+    [[ "$nuc" == "ATP" || "$nuc" == "GTP" ]] || { echo "NUCLEOTIDES: ATP and GTP only, got '$nuc'" >&2; exit 1; }
+done
+
 if [[ "$SMOKE" == "1" ]]; then
     PS=8; NG=4; TIME=00:30:00; REPS=1
     OUTROOT="${OUTROOT}_smoke"
@@ -70,22 +78,23 @@ case "$CONTROL" in
     *) echo "CONTROL must be none or neutral" >&2; exit 1 ;;
 esac
 
-printf '%-44s %-16s %s\n' "run directory" "ligand" "alphabet"
+printf '%-52s %-10s %s\n' "run directory" "ligand" "alphabet"
 n_jobs=0
-for alphabet in $ALPHABETS; do
+for nuc in $NUCLEOTIDES; do
+ for alphabet in $ALPHABETS; do
   for cation in $CATIONS; do
-    if [[ "$cation" == "none" ]]; then ligand="ATP"; cond="ATP"; else ligand="ATP,$cation"; cond="ATP_$cation"; fi
+    if [[ "$cation" == "none" ]]; then ligand="$nuc"; cond="$nuc"; else ligand="$nuc,$cation"; cond="${nuc}_$cation"; fi
     for i in $(seq 1 "$REPS"); do
       rep=$(printf '%02d' "$i")
       outdir="$OUTROOT/$alphabet/$cond/run$rep"
-      printf '%-44s %-16s %s\n' "$outdir" "$ligand" "$alphabet"
+      printf '%-52s %-10s %s\n' "$outdir" "$ligand" "$alphabet"
       n_jobs=$((n_jobs + 1))
       [[ $SUBMIT == 1 ]] || continue
 
       mkdir -p "$(dirname "$outdir")"
       sbatch <<EOF
 #!/bin/bash
-#SBATCH --job-name=atp_${alphabet}_${cond}_r${rep}
+#SBATCH --job-name=evo_${alphabet}_${cond}_r${rep}
 #SBATCH --partition=${PARTITION}
 #SBATCH --gres=${GRES}
 #SBATCH --cpus-per-task=${CPUS}
@@ -111,6 +120,7 @@ visualames -l "${outdir}/progress.log"
 EOF
     done
   done
+ done
 done
 
 if [[ $SUBMIT == 1 ]]; then
