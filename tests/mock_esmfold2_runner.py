@@ -1,0 +1,28 @@
+"""Stand-in for ames' esmfold2_runner module (same call signature, no GPU).
+
+ames.py does ``from esmfold2_runner import esmfold2_runner``; mock_ames.py puts this
+module into sys.modules under that name so the real ames code path (ligand input,
+scoring, selection, logging) runs end to end. Confidence values are a made-up
+function of the sequence - the fraction of charged residues - so that selection
+has something to climb; they say nothing about real folding or binding.
+"""
+from synthetic import build_complex
+
+CHARGED = set("DERK")
+
+
+def esmfold2_runner(seq_data_list):
+    if isinstance(seq_data_list, dict):
+        seq_data_list = [seq_data_list]
+    structures, plddts, ptms, iptms = [], [], [], []
+    for data in seq_data_list:
+        seq = data["seq1"]["sequence"]
+        ligands = data.get("ligand", [])
+        assert ligands and ligands[0] == "ATP", f"expected ATP first, got {ligands}"
+        ion = ligands[1] if len(ligands) > 1 else ""
+        frac = sum(aa in CHARGED for aa in seq) / len(seq)
+        structures.append(build_complex(seq, ion=ion))
+        plddts.append(0.8)  # mean pLDDT is 0-1 (structure B-factors are pLDDT*100), as in the real runner
+        ptms.append(0.6)
+        iptms.append(round(min(0.95, 0.1 + 1.5 * frac), 3))
+    return structures, plddts, ptms, iptms
