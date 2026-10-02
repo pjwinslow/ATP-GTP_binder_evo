@@ -241,8 +241,13 @@ def test_min_length_reaches_ames():
 
         plan = _run([], env, path, work).stdout
         assert "chain length: start 65, limits none..160 (soft), mutations: npm" in plan, plan
+        assert "WARNING: MUT=npm" in plan and "WARNING: no MINLEN" in plan
         plan = _run([], {**env, "MINLEN": "50", "MUT": "pmo"}, path, work).stdout
         assert "chain length: start 65, limits 50..160 (soft), mutations: pmo" in plan, plan
+        assert "WARNING" not in plan
+        # the same warnings reach stderr on a real submit, without blocking it
+        res = _run(["--submit"], env, path, work)
+        assert res.returncode == 0 and "WARNING: MUT=npm" in res.stderr and "WARNING: no MINLEN" in res.stderr
 
         assert _run(["--submit"], env, path, work).returncode == 0
         assert 'MINLEN=""' in _job_scripts(bindir)[0].read_text()

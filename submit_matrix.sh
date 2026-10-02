@@ -164,6 +164,12 @@ manifest_text() {   # row N (0-based) is array index N
     done
 }
 
+length_warnings() {
+    [[ "$MUT" == "npm" ]] && echo "WARNING: MUT=npm includes '%' (delete a chunk) and 'r' (replace the chain by 3-5 random residues). In the MSI smoke test a single '%' took 65-residue chains to 7 and 10 residues in generations 1-2 (see README: Chain length). MUT=pmo avoids this."
+    [[ -z "$MINLEN" ]] && echo "WARNING: no MINLEN, so nothing opposes short chains. MINLEN=50 is a reasonable floor for a 65-residue start."
+    return 0
+}
+
 if [[ $STATUS == 1 ]]; then
     exec python3 "$HERE/run_status.py" "$MANIFEST"
 fi
@@ -176,12 +182,14 @@ if [[ $SUBMIT == 0 ]]; then
     echo "environment: ${ENV_ACTIVATE}   (${ENV_SOURCE})"
     echo "ccd.pkl:     ${CCD_PATH:-from the Hugging Face cache (python fetch_hub_files.py)}"
     echo "chain length: start ${LEN0}, limits ${MINLEN:-none}..${MAXLEN} (soft), mutations: ${MUT}"
+    length_warnings
     echo "$N_RUNS runs planned: PS=$PS NG=$NG, $PARTITION, $GPUS, $MEM, $TIME, up to $MAX_PARALLEL at once."
     echo "Nothing submitted. Add --submit to submit; --status shows progress afterwards."
     exit 0
 fi
 
 # ── SUBMIT ────────────────────────────────────────────────────────────────────
+length_warnings >&2
 cd "$WORKDIR"
 mkdir -p "$OUTROOT" logs
 if [[ -f "$MANIFEST" ]] && ! manifest_text | cmp -s - "$MANIFEST"; then

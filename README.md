@@ -224,8 +224,10 @@ nucleotide, alphabet and cation at the same lineage length.
 **Chain length can collapse: set a floor.** ames' default lower length limit is −9, which is no
 limit, and its default mutation set (`npm`) contains operators that can shrink a chain a lot in one
 step: `%` deletes a random chunk (up to all but 2 residues) and `r` replaces the whole chain with 3–5
-random residues. The first smoke run on MSI (8 sequences, 12 generations) started at 65 residues
-and ended on a 7-residue peptide (`PPAADDP`). The likely reason, not yet established, is that the
+random residues. In the first smoke runs on MSI (8 sequences, 12 generations) both lineages started at
+65 residues and lost almost all of them in a single `%` event in the first two generations: 65 to 7
+residues in the ATP+Mg run (`V7%58`, final sequence `PPAADDP`) and 65 to 10 in the GTP+Mg run (`P5%55`).
+The tiny chains then scored well and were kept. The likely reason, not established, is that the
 complex scores (pTM, ipTM, pLDDT) are computed over the protein *and* the ligand atoms, so a tiny chain
 next to ATP can score well and nothing opposes it. Two settings address it: `MINLEN=N` (ames'
 `--seq1_min_len`, a soft limit: the score is multiplied by 0.5 at N residues, 0.95 six above and
