@@ -142,13 +142,35 @@ def test_environment_selection_and_failed_activation():
         work.mkdir()
         base = {"OUTROOT": str(tmp / "out"), "ALPHABETS": "GADVP", "CATIONS": "none", "REPS": "1",
                 "NUCLEOTIDES": "ATP"}
-        active = {"CONDA_PREFIX": "/users/me/miniforge3/envs/esmfold2", "CONDA_EXE": "/users/me/miniforge3/bin/conda"}
+        # a conda installation (with a conda.sh) that owns an environment, and a different one the shell loaded
+        mini, other = tmp / "miniforge3", tmp / "msi_anaconda"
+        for root in (mini, other):
+            (root / "etc/profile.d").mkdir(parents=True)
+            (root / "etc/profile.d/conda.sh").write_text("")
+        env_dir = mini / "envs/esmfold2"
+        env_dir.mkdir(parents=True)
+        # the user's real situation: CONDA_PREFIX is in miniforge, CONDA_EXE belongs to another conda
+        active = {"CONDA_PREFIX": str(env_dir), "CONDA_EXE": str(other / "bin/conda")}
 
-        # the environment active in the submitting shell is used, through the conda installation that owns it
+        # the environment active in the submitting shell is used, through the conda installation that OWNS it
         out = _run([], {**base, **active}, path, work).stdout
-        assert ("environment: source /users/me/miniforge3/etc/profile.d/conda.sh && "
-                "conda activate /users/me/miniforge3/envs/esmfold2") in out and "active in this shell" in out
-        assert "/common/software" not in out
+        assert f"environment: source {mini}/etc/profile.d/conda.sh && conda activate {env_dir}" in out, out
+        assert "active in this shell" in out and str(other) not in out and "/common/software" not in out
+
+        # an environment created elsewhere (-p): fall back to the conda that CONDA_EXE belongs to
+        custom = tmp / "scratch_env"
+        custom.mkdir()
+        out = _run([], {**base, "CONDA_PREFIX": str(custom), "CONDA_EXE": str(other / "bin/conda")}, path, work).stdout
+        assert f"source {other}/etc/profile.d/conda.sh && conda activate {custom}" in out, out
+
+        # nothing to derive a conda root from (no /envs/ in the path, no CONDA_EXE): the MSI default,
+        # not a lookup of /etc/profile.d/conda.sh, which exists on machines with a system-wide conda
+        out = _run([], {**base, "CONDA_PREFIX": str(custom), "CONDA_EXE": ""}, path, work).stdout
+        assert "/common/software" in out and f"conda activate {custom}" not in out, out
+
+        # no conda.sh can be found for the active environment: the MSI default, not a broken command
+        out = _run([], {**base, "CONDA_PREFIX": "/nowhere/envs/x", "CONDA_EXE": "/nowhere/bin/conda"}, path, work).stdout
+        assert "/common/software" in out and "conda activate esmfold2" in out and "/nowhere" not in out
 
         # CONDA_ENV names an environment in the MSI conda instead
         out = _run([], {**base, **active, "CONDA_ENV": "other"}, path, work).stdout

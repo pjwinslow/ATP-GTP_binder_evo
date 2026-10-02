@@ -30,8 +30,8 @@
 #             MAX_PARALLEL [25] simultaneous array tasks   CPUS [unset]   ACCOUNT [unset]
 #             MAIL_USER [unset: no mail]  MAIL_TYPE [END,FAIL] (one mail per array, not per task)
 #   Environment  By default the jobs activate the conda environment that is active in the
-#             shell you submit from (its own conda.sh and path), so submit from the shell
-#             where `python check_env.py` passes. Overrides, in this order:
+#             shell you submit from, through the conda installation that owns it, so submit
+#             from the shell where `python check_env.py` passes. Overrides, in this order:
 #             ENV_ACTIVATE='any command that activates the env'
 #             CONDA_ENV=name [with CONDA_SH=/path/to/conda.sh, default: the MSI anaconda's]
 #             With no env active and none given: CONDA_SH + environment "esmfold2".
@@ -73,13 +73,24 @@ if [[ -n "${ENV_ACTIVATE:-}" ]]; then
 elif [[ -n "${CONDA_ENV:-}" ]]; then
     ENV_ACTIVATE="source ${CONDA_SH} && conda activate ${CONDA_ENV}"
     ENV_SOURCE="CONDA_ENV=${CONDA_ENV}"
-elif [[ -n "${CONDA_PREFIX:-}" && -n "${CONDA_EXE:-}" ]]; then
-    # the environment active in this shell, through the conda installation that owns it
-    ENV_ACTIVATE="source $(dirname "$(dirname "${CONDA_EXE}")")/etc/profile.d/conda.sh && conda activate ${CONDA_PREFIX}"
+elif [[ -n "${CONDA_PREFIX:-}" ]] && {
+        # The environment active in this shell, activated through the conda installation that owns it:
+        # <root>/envs/<name> belongs to <root>. CONDA_EXE is only the fallback (for environments created
+        # with -p elsewhere) because a shell can load a different conda than the one that made the
+        # environment, e.g. the MSI anaconda while the environment lives in the user's own miniforge.
+        conda_root=""
+        [[ "${CONDA_PREFIX}" == */envs/* ]] && conda_root="${CONDA_PREFIX%/envs/*}"
+        if [[ -z "${conda_root}" || ! -f "${conda_root}/etc/profile.d/conda.sh" ]]; then
+            conda_root=""
+            [[ -n "${CONDA_EXE:-}" ]] && conda_root="$(dirname "$(dirname "${CONDA_EXE}")")"
+        fi
+        [[ -n "${conda_root}" && -f "${conda_root}/etc/profile.d/conda.sh" ]]
+    }; then
+    ENV_ACTIVATE="source ${conda_root}/etc/profile.d/conda.sh && conda activate ${CONDA_PREFIX}"
     ENV_SOURCE="the conda environment active in this shell"
 else
     ENV_ACTIVATE="source ${CONDA_SH} && conda activate esmfold2"
-    ENV_SOURCE="default: no environment active, no CONDA_ENV given"
+    ENV_SOURCE="default: no environment active (or its conda.sh was not found), no CONDA_ENV given"
 fi
 
 NUCLEOTIDES="${NUCLEOTIDES:-ATP GTP}"
