@@ -17,7 +17,8 @@ divalent cation is present?
 The default matrix is 2 nucleotides × 4 alphabets × 2 cation conditions × 3
 replicates = **48 runs**, plus the neutral control if you run it.
 
-ames is used unmodified. Each run is a population (default 100) of chains that
+ames is not modified (the alphabets and checkpoint resume are patched in at run time).
+Each run is a population (default 100) of chains that
 start random (`protein:randoms:65:evolv`), mutate every generation (substitutions,
 indels, duplications, …), are folded with ESMFold2 together with the ligand(s), and
 are selected on a score from pTM, pLDDT, ipTM, interface pLDDT, protein contact
@@ -29,9 +30,11 @@ density and ligand contact density. Each run evolves under **one** nucleotide.
 |---|---|
 | `ames_alphabets.py` | the four alphabets; registers them in ames' `Evolver` |
 | `run_ames_alphabet.py` | `ames` with `--alphabet NAME` added; all other arguments go to ames |
-| `submit_matrix.sh` | Slurm: nucleotide × alphabet × cation × replicate, one GPU job each (dry run unless `--submit`) |
+| `ames_resume.py` | checkpoint resume for ames (`--resume`), which ames lacks; see [Preemption and resume](#preemption-and-resume) |
+| `submit_matrix.sh` | one Slurm job array for the whole matrix, MSI settings from a working script; `--status`, resubmit by index (plan only unless `--submit`) |
+| `check_env.py` · `run_status.py` | environment pre-flight (run by every job) · progress of each run |
 | `summarize_matrix.py` | aggregate runs, re-measure nucleotide/ion contacts, make tables and figures |
-| `tests/` | alphabet tests, structure-metric tests, end-to-end test with a mock fold engine (no GPU) |
+| `tests/` | alphabet, structure-metric, resume and submitter tests, end-to-end test with a mock fold engine (no GPU) |
 
 ## Setup on MSI
 
@@ -39,13 +42,20 @@ ames needs **Python ≥ 3.12** (`rnatools.py` uses an f-string syntax that is a
 `SyntaxError` on 3.11 and older, although ames' README says ≥ 3.10) and a C++17
 compiler (`module load gcc`) to build its contact-calculation extension.
 
-Install into a **copy** of your working ESMFold2 environment, because ames pins
-`numpy>=2.0`, which can break a torch build made against numpy 1.x:
+The jobs use the conda environment `esmfold2` (activated with the MSI `conda.sh` that
+`submit_matrix.sh` defaults to; override with `CONDA_SH`/`CONDA_ENV`, or `ENV_ACTIVATE` for
+any other activation command). It needs ames and biopython on top of ESMFold2. If you add
+them to a **copy** of the environment you protect it from ames' `numpy>=2.0` pin, which
+can break a torch build made against numpy 1.x:
 
 ```bash
-pip install git+https://github.com/sahakyanhk/ames
+conda activate esmfold2
+pip install git+https://github.com/sahakyanhk/ames@dd39c57   # the commit these scripts were tested with
 pip install biopython     # imported by ames at start-up but missing from its dependency list
+python check_env.py       # on a login node, everything but the GPU line should say ok
 ```
+Pinning `dd39c57` matters: the resume patch rewrites part of ames' main loop and refuses
+to run on a version it does not recognise.
 
 ames loads the ESMFold2 weights (`biohub/ESMFold2`) from the Hugging Face hub when
 the run starts. If compute nodes have no internet, warm the cache on a login node
@@ -53,35 +63,65 @@ and `export HF_HOME=...` (inherited by the jobs) with `HF_HUB_OFFLINE=1`.
 
 ## Running
 
-1. **Smoke test** (8 sequences × 4 generations, one job): confirms the environment,
+Run from a checkout of this repo on MSI (`WORKDIR` defaults to the script's directory).
+The Slurm settings are those of your working MSI script: `preempt-gpu`, `gpu:1`, 40G,
+24 h, `--requeue`, at most 25 array tasks at once, one array for the whole matrix with
+logs in `logs/`. Override any of them with environment variables (see the header of
+`submit_matrix.sh`); `MAIL_USER=you@umn.edu` turns on the one end/fail mail per array.
+
+1. **Smoke test** (8 sequences × 4 generations, 30 min): confirms the environment,
    ESMFold2, ligand input and `visualames` work, and shows the throughput. With the
-   default `NUCLEOTIDES` this submits one job per nucleotide, which also confirms that
+   default `NUCLEOTIDES` it runs one job per nucleotide, which also confirms that
    ESMFold2 accepts both ligands:
 
    ```bash
-   export ENV_ACTIVATE='conda activate ames-esm'    # whatever activates your env
-   SMOKE=1 ALPHABETS=GADVP CATIONS=MG ./submit_matrix.sh --submit
+   SMOKE=1 ALPHABETS=GADVP CATIONS=MG bash submit_matrix.sh --submit
    ```
-   ames prints `#N generations per day` every 10 generations in the job's `.out`
-   file. **Size `NG`/`PS`/`TIME` from that number before launching the matrix.** A
-   run folds `PS × NG` sequences one after another (default 100 × 1000 = 100,000).
-   ames has **no resume**: a job that hits its walltime keeps its partial
-   `progress.log` but cannot be continued.
+   ames prints `#N generations per day` every 10 generations in each task's
+   `logs/*.out`. **Size `NG`, `PS` and the number of 24-hour slots from that number
+   before launching the matrix.** A run folds `PS × NG` sequences one after another
+   (default 100 × 1000 = 100,000).
 
-2. **Plan, then submit the matrix.** Without `--submit` the script only prints
-   the runs. `PARTITION`, `GRES`, `TIME` default to `a100-4`, `gpu:a100:1`,
-   `72:00:00`, which are guesses: check `sinfo` / the MSI docs and override.
+2. **Plan, submit, monitor.** Without `--submit` the script only prints the plan.
 
    ```bash
-   ./submit_matrix.sh                                    # 48 jobs
-   NUCLEOTIDES=GTP ./submit_matrix.sh                    # 24 jobs, GTP only
-   PARTITION=... GRES=... TIME=... ./submit_matrix.sh --submit
-   CONTROL=neutral NG=200 REPS=3 ./submit_matrix.sh --submit   # the no-selection null
+   bash submit_matrix.sh                       # plan: 48 runs, one array index each
+   bash submit_matrix.sh --submit              # submit them all
+   bash submit_matrix.sh --status              # per-run progress + the unfinished indices
+   bash submit_matrix.sh --submit 12,45,99     # resubmit just those indices (they resume)
+   NUCLEOTIDES=GTP bash submit_matrix.sh       # 24 runs, GTP only
+   CONTROL=neutral NG=200 bash submit_matrix.sh --submit   # the no-selection null
    ```
+   `--status`, resubmits and the plan must use the same settings as the original submit:
+   array indices refer to `outputs/nuc_matrix/manifest.tsv`, and a submit whose settings
+   would change that file is refused.
+
    Outputs: `outputs/nuc_matrix/<alphabet>/<ATP|ATP_MG|GTP|GTP_MG>/runNN/` (neutral
-   control: `outputs/nuc_matrix_neutral/…`). Each `progress.log` embeds a compressed
-   structure per row and gets large; keep outputs on scratch. Each job ends with
-   `visualames`, which writes `lineage.tsv`, `structures/` and plots next to the log.
+   control: `outputs/nuc_matrix_neutral/…`; smoke test: `…_smoke`). Each `progress.log`
+   embeds a compressed structure per row and gets large; keep outputs on scratch. A task
+   ends with `visualames` (writes `lineage.tsv`, `structures/` and plots next to the log)
+   and a `DONE` marker file.
+
+### Preemption and resume
+
+ames has no resume of its own: it always starts at generation 0 and moves an existing
+output directory aside. On `preempt-gpu` with `--requeue` that would restart every
+preempted run from scratch, so the launcher is run with `--resume` (`ames_resume.py`):
+
+- ames checkpoints the population every generation (`CKPI`, default 1). A requeued task
+  loads `progress.ckp`, cuts `progress.log` back to that generation, restores the
+  annealing schedule and continues; a run with no checkpoint starts normally.
+- Slurm requeues preempted jobs but **not** jobs that hit the 24-hour limit. A run that
+  needs more than one slot ends as `TIMEOUT`: use `--status` and resubmit the unfinished
+  indices; they continue from their checkpoint.
+- A finished run (`DONE` present) is skipped, so resubmitting everything is safe.
+- A checkpoint made with a different alphabet, ligand or population size is refused.
+- Not restored: ames' memo of already-folded sequences (a few sequences may be folded
+  twice) and the random-number state, so a resumed run is statistically equivalent to,
+  not bit-identical with, an uninterrupted one.
+- `tests/test_resume.py` kills a real run with SIGKILL, resumes it, and checks that every
+  generation appears exactly once, the selection strength continues on schedule across the
+  break, and `visualames` still works.
 
 3. **Summarise** (login node is fine):
 
@@ -166,6 +206,8 @@ natural thing to look at in `contact_composition.csv` and the `ion_coord_*` colu
   rejects (`unrecognized arguments`); `submit_matrix.sh` uses `--seq1_max_len`.
 - ames' `-ed/--evoldict` option is parsed but never used, which is why alphabets are
   registered by `run_ames_alphabet.py` instead.
+- The resume patch is pinned to ames commit `dd39c57`; on another version it stops with an
+  error naming the line it could not find rather than running without resume.
 - Not run against real ESMFold2 here (no GPU or weights), for ATP or GTP. I read the
   `esm` 3.4.1 source to confirm what ames relies on: `result.plddt` is 0–1, structure
   B-factors are pLDDT × 100, ligands come out as one residue named by the CCD code with
@@ -179,8 +221,13 @@ natural thing to look at in `contact_composition.csv` and the `ion_coord_*` colu
 ```bash
 python tests/test_alphabets.py            # needs ames importable
 python tests/test_structure_metrics.py    # needs biotite (an ames dependency)
+python tests/test_resume.py               # ~25 s: kill a run, resume it, check the stitched log
+python tests/test_submit.py               # ~25 s: fake sbatch; directives, manifest, job body, --status
 python tests/run_mock_e2e.py              # ~1 min on 4 cores: launcher → ames → visualames → summarizer, mock fold engine
 ```
 The mock engine (`tests/mock_esmfold2_runner.py`) builds synthetic protein + nucleotide
 (+ Mg) structures and returns made-up confidences, so it exercises the plumbing and the
-scoring path for both nucleotides, not ESMFold2 or any biology.
+scoring path for both nucleotides, not ESMFold2 or any biology. Slurm itself is not
+available here: the generated job script is checked against a fake `sbatch`, and its body
+is run directly, so the first real submission (the smoke test) is the check of the
+Slurm/conda/GPU side.
