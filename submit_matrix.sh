@@ -202,6 +202,7 @@ ${MAIL_USER:+#SBATCH --mail-user=${MAIL_USER}}
 # ── Environment (strict mode only after conda: its activate scripts are not 'set -u' clean)
 ${ENV_ACTIVATE} || { echo "ERROR: could not activate the environment; check CONDA_ENV / CONDA_SH / ENV_ACTIVATE in submit_matrix.sh" >&2; exit 1; }
 export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1   # redirected stdout is block-buffered; without this logs/*.out lags far behind the job
 
 # ── Settings fixed at submit time
 SCRIPTS="${HERE}"

@@ -78,6 +78,7 @@ def test_submit_and_run_job_body():
                          "#SBATCH --job-name=nuc_evo_smoke", "--resume"):
             assert expected in job, expected
         assert "--mail-" not in job and "--account" not in job and "--cpus-per-task" not in job
+        assert "export PYTHONUNBUFFERED=1" in job and "export PYTHONNOUSERSITE=1" in job
         assert job.index("true") < job.index("set -euo pipefail"), "strict mode must come after the env activation"
 
         manifest = (Path(base["OUTROOT"] + "_smoke") / "manifest.tsv").read_text().splitlines()
