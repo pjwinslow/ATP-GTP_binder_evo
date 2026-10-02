@@ -79,6 +79,8 @@ def test_submit_and_run_job_body():
             assert expected in job, expected
         assert "--mail-" not in job and "--account" not in job and "--cpus-per-task" not in job
         assert "export PYTHONUNBUFFERED=1" in job and "export PYTHONNOUSERSITE=1" in job
+        # jobs run offline (the hub rate-limits shared IPs), after check_env has confirmed the cache is complete
+        assert "export HF_HUB_OFFLINE=1" in job and "ESMCFOLD_CCD_PATH" not in job
         assert job.index("true") < job.index("set -euo pipefail"), "strict mode must come after the env activation"
 
         manifest = (Path(base["OUTROOT"] + "_smoke") / "manifest.tsv").read_text().splitlines()
@@ -96,6 +98,20 @@ def test_submit_and_run_job_body():
         for expected in ("#SBATCH --mail-user=me@example.org", "#SBATCH --mail-type=END,FAIL",
                          "#SBATCH --account=grp", "#SBATCH --cpus-per-task=4"):
             assert expected in job2, expected
+
+        # HF_OFFLINE=0 allows downloads; CCD_PATH hands the jobs a local ccd.pkl
+        res = _run(["--submit"], {**env, "HF_OFFLINE": "0", "CCD_PATH": "/data/ccd.pkl"}, path, work)
+        assert res.returncode == 0, res.stderr
+        online = _job_scripts(bindir)[-1].read_text()
+        assert "HF_HUB_OFFLINE" not in online and "export ESMCFOLD_CCD_PATH=/data/ccd.pkl\n" in online
+        # a path with a space must still be a single valid assignment in the job script
+        res = _run(["--submit"], {**env, "CCD_PATH": "/data/my files/ccd.pkl"}, path, work)
+        spaced = _job_scripts(bindir)[-1].read_text()
+        assert "export ESMCFOLD_CCD_PATH=/data/my\\ files/ccd.pkl\n" in spaced and "export HF_HUB_OFFLINE=1" in spaced
+        assert subprocess.run(["bash", "-c", "export ESMCFOLD_CCD_PATH=/data/my\\ files/ccd.pkl; echo \"$ESMCFOLD_CCD_PATH\""],
+                              capture_output=True, text=True).stdout.strip() == "/data/my files/ccd.pkl"
+        for extra in _job_scripts(bindir)[-2:]:
+            extra.unlink()  # keep the numbering below
 
         # resubmitting specific indices; changed settings are refused instead of shifting the indices
         res = _run(["--submit", "1,2"], env, path, work)

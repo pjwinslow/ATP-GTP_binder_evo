@@ -32,7 +32,7 @@ density and ligand contact density. Each run evolves under **one** nucleotide.
 | `run_ames_alphabet.py` | `ames` with `--alphabet NAME` added; all other arguments go to ames |
 | `ames_resume.py` | checkpoint resume for ames (`--resume`), which ames lacks; see [Preemption and resume](#preemption-and-resume) |
 | `submit_matrix.sh` | one Slurm job array for the whole matrix, MSI settings from a working script; `--status`, resubmit by index (plan only unless `--submit`) |
-| `check_env.py` · `run_status.py` | environment pre-flight (run by every job) · progress of each run |
+| `check_env.py` · `fetch_hub_files.py` · `run_status.py` | environment pre-flight (run by every job) · download the Hugging Face files the jobs need, once · progress of each run |
 | `summarize_matrix.py` | aggregate runs, re-measure nucleotide/ion contacts, make tables and figures |
 | `tests/` | alphabet, structure-metric, resume and submitter tests, end-to-end test with a mock fold engine (no GPU) |
 
@@ -70,9 +70,25 @@ torch untouched. `check_env.py` reports the version and the fix.
 Pinning `dd39c57` matters: the resume patch rewrites part of ames' main loop and refuses
 to run on a version it does not recognise.
 
-ames loads the ESMFold2 weights (`biohub/ESMFold2`) from the Hugging Face hub when
-the run starts. If compute nodes have no internet, warm the cache on a login node
-and `export HF_HOME=...` (inherited by the jobs) with `HF_HUB_OFFLINE=1`.
+### Hugging Face files (once, on a login node)
+
+ESMFold2 needs files from the Hugging Face hub: the weights, and `ccd.pkl` (the chemical
+component dictionary that defines ATP, GTP and Mg), which it downloads the first time it
+builds a ligand. Protein-only use never needs `ccd.pkl`, so it is usually not cached, and the
+hub rate-limits shared IP addresses (HTTP 429, "We had to rate limit your IP"). Without the file
+every job died in its first fold with `Failed to download CCD pickle file` and a 429.
+
+```bash
+python fetch_hub_files.py      # downloads what is missing and waits out rate limits
+python check_env.py            # "ccd.pkl ... : /path" should now say ok
+```
+- If it keeps failing with 429: make a free Hugging Face account and a read token
+  (https://huggingface.co/settings/tokens), `export HF_TOKEN=hf_...`, and run it again.
+- If MSI cannot reach the hub: download `https://huggingface.co/biohub/ESMFold2/resolve/main/ccd.pkl`
+  on your own computer, copy it to MSI, and submit with `CCD_PATH=/path/to/ccd.pkl`.
+- The jobs run with `HF_HUB_OFFLINE=1` (`HF_OFFLINE=0` to allow downloads), so up to 25 tasks
+  starting at once never contact the hub. `check_env.py`, which every job runs first, fails in
+  seconds, naming the missing file, if anything is not cached.
 
 ## Running
 
@@ -239,6 +255,7 @@ python tests/test_alphabets.py            # needs ames importable
 python tests/test_structure_metrics.py    # needs biotite (an ames dependency)
 python tests/test_resume.py               # ~25 s: kill a run, resume it, check the stitched log
 python tests/test_submit.py               # ~25 s: fake sbatch; directives, manifest, job body, --status
+python tests/test_hub_files.py            # fake Hugging Face cache; needs huggingface_hub (an esm dependency)
 python tests/run_mock_e2e.py              # ~1 min on 4 cores: launcher → ames → visualames → summarizer, mock fold engine
 ```
 The mock engine (`tests/mock_esmfold2_runner.py`) builds synthetic protein + nucleotide

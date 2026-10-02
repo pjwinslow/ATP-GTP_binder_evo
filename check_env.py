@@ -11,6 +11,7 @@ import importlib
 import importlib.metadata
 import re
 import sys
+from pathlib import Path
 
 AMES_PIN = "git+https://github.com/sahakyanhk/ames@dd39c57"
 ESM_MIN = (3, 4, 1)  # ames declares esm>=3.4.1; 3.4.0 cannot load the current biohub/ESMFold2 weights
@@ -71,6 +72,17 @@ def main() -> int:
             problems.append(problem)
     except importlib.metadata.PackageNotFoundError:
         pass  # the esm.models.esmfold2 import above already reported it
+
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import fetch_hub_files
+        for need in fetch_hub_files.status():
+            print(f"{'ok  ' if need.path else 'FAIL'}  {need.label}" + (f": {need.path}" if need.path else " is not available locally"))
+            if not need.path:
+                problems.append(f"{need.label} is not available locally; jobs run offline and would die in their first fold. "
+                                f"Fix, on a login node: python fetch_hub_files.py  (see its --help if the hub rate-limits you)")
+    except Exception as err:  # noqa: BLE001 - huggingface_hub problems are reported by the esm import above
+        print(f"info  could not check the Hugging Face cache: {type(err).__name__}: {err}")
 
     try:
         import torch

@@ -35,6 +35,9 @@
 #             ENV_ACTIVATE='any command that activates the env'
 #             CONDA_ENV=name [with CONDA_SH=/path/to/conda.sh, default: the MSI anaconda's]
 #             With no env active and none given: CONDA_SH + environment "esmfold2".
+#   Hub       HF_OFFLINE [1] jobs run with HF_HUB_OFFLINE=1: every Hugging Face file must already be
+#             cached (python fetch_hub_files.py on a login node; 0 = allow downloads, which the
+#             hub rate-limits on shared IPs)   CCD_PATH [unset] path of a ccd.pkl, becomes ESMCFOLD_CCD_PATH
 #   Layout    WORKDIR [directory of this script]  OUTROOT [$WORKDIR/outputs/nuc_matrix]
 #   Matrix    NUCLEOTIDES [ATP GTP]  ALPHABETS [GADVP GADVPSELT GADVPSELTRIQN ALL20]
 #             CATIONS [none MG]  REPS [3]
@@ -103,6 +106,8 @@ LEN0="${LEN0:-65}"
 MAXLEN="${MAXLEN:-160}"
 MUT="${MUT:-npm}"
 CKPI="${CKPI:-1}"
+HF_OFFLINE="${HF_OFFLINE:-1}"
+CCD_PATH="${CCD_PATH:-}"
 BETA0="${BETA0:-0.8}"
 BETAT="${BETAT:-8.0}"
 CONTROL="${CONTROL:-none}"
@@ -126,6 +131,12 @@ case "$CONTROL" in
     *) echo "CONTROL must be none or neutral" >&2; exit 1 ;;
 esac
 MANIFEST="$OUTROOT/manifest.tsv"
+# Built here, not with ${VAR:+...} inside the heredoc: bash drops double quotes there, which would break
+# a path containing a space. printf %q escapes it properly.
+HF_OFFLINE_LINE=""
+[[ "$HF_OFFLINE" == "1" ]] && HF_OFFLINE_LINE="export HF_HUB_OFFLINE=1   # files come from the local cache: no network, no rate limit"
+CCD_LINE=""
+[[ -n "$CCD_PATH" ]] && CCD_LINE="export ESMCFOLD_CCD_PATH=$(printf '%q' "$CCD_PATH")"
 
 manifest_text() {   # row N (0-based) is array index N
     printf 'idx\tnucleotide\talphabet\tcation\trep\tligand\toutdir\n'
@@ -203,6 +214,8 @@ ${MAIL_USER:+#SBATCH --mail-user=${MAIL_USER}}
 ${ENV_ACTIVATE} || { echo "ERROR: could not activate the environment; check CONDA_ENV / CONDA_SH / ENV_ACTIVATE in submit_matrix.sh" >&2; exit 1; }
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1   # redirected stdout is block-buffered; without this logs/*.out lags far behind the job
+${HF_OFFLINE_LINE}
+${CCD_LINE}
 
 # ── Settings fixed at submit time
 SCRIPTS="${HERE}"
