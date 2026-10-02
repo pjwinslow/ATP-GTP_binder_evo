@@ -42,7 +42,10 @@
 #   Matrix    NUCLEOTIDES [ATP GTP]  ALPHABETS [GADVP GADVPSELT GADVPSELTRIQN ALL20]
 #             CATIONS [none MG]  REPS [3]
 #   ames      PS [100] population  NG [1000] generations  LEN0 [65] start length
-#             MAXLEN [160]  MUT [npm] (npm | pmo)  CKPI [1] checkpoint every N generations
+#             MAXLEN [160]  MINLEN [unset] soft lower length limit (ames' --seq1_min_len: the score is
+#             multiplied by 0.5 at MINLEN residues, 0.95 six residues above, 0.05 six below)
+#             MUT [npm] (npm = substitutions, indels, duplications, deletions of chunks, permutations;
+#             pmo = substitutions and single-residue indels only)  CKPI [1] checkpoint every N generations
 #             BETA0 [0.8] BETAT [8.0] ANN_S [0.15*NG] ANN_E [NG-1]  selection-strength annealing
 set -euo pipefail
 
@@ -104,6 +107,7 @@ PS="${PS:-100}"
 NG="${NG:-1000}"
 LEN0="${LEN0:-65}"
 MAXLEN="${MAXLEN:-160}"
+MINLEN="${MINLEN:-}"
 MUT="${MUT:-npm}"
 CKPI="${CKPI:-1}"
 HF_OFFLINE="${HF_OFFLINE:-1}"
@@ -171,6 +175,7 @@ if [[ $SUBMIT == 0 ]]; then
     echo
     echo "environment: ${ENV_ACTIVATE}   (${ENV_SOURCE})"
     echo "ccd.pkl:     ${CCD_PATH:-from the Hugging Face cache (python fetch_hub_files.py)}"
+    echo "chain length: start ${LEN0}, limits ${MINLEN:-none}..${MAXLEN} (soft), mutations: ${MUT}"
     echo "$N_RUNS runs planned: PS=$PS NG=$NG, $PARTITION, $GPUS, $MEM, $TIME, up to $MAX_PARALLEL at once."
     echo "Nothing submitted. Add --submit to submit; --status shows progress afterwards."
     exit 0
@@ -226,7 +231,7 @@ ${CCD_LINE}
 SCRIPTS="${HERE}"
 WORKDIR="${WORKDIR}"
 MANIFEST="${MANIFEST}"
-PS="${PS}"; NG="${NG}"; LEN0="${LEN0}"; MAXLEN="${MAXLEN}"; MUT="${MUT}"; CKPI="${CKPI}"
+PS="${PS}"; NG="${NG}"; LEN0="${LEN0}"; MAXLEN="${MAXLEN}"; MINLEN="${MINLEN}"; MUT="${MUT}"; CKPI="${CKPI}"
 SEL_ARGS="${SEL_ARGS}"
 HEAD
 cat <<'BODY'
@@ -256,7 +261,7 @@ mkdir -p "$(dirname "$OUTDIR")"
 python "$SCRIPTS/run_ames_alphabet.py" --alphabet "$ALPHABET" --resume \
     --iseq1 "protein:randoms:${LEN0}:evolv" --seq1_rate 1 \
     --ligand "$LIGAND" \
-    -pm1 "$MUT" --seq1_max_len "$MAXLEN" \
+    -pm1 "$MUT" --seq1_max_len "$MAXLEN" ${MINLEN:+--seq1_min_len "$MINLEN"} \
     -ps "$PS" -ng "$NG" -ckpi "$CKPI" $SEL_ARGS \
     --engine esmfold2 \
     -o "$OUTDIR"

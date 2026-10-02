@@ -229,6 +229,41 @@ def test_environment_selection_and_failed_activation():
         assert res.returncode == 1 and "could not activate the environment" in res.stderr, res.stderr
 
 
+def test_min_length_reaches_ames():
+    import re
+    with tempfile.TemporaryDirectory(prefix="ames_minlen_") as t:
+        tmp = Path(t)
+        bindir, path = _setup(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        env = {"OUTROOT": str(tmp / "out"), "ALPHABETS": "GADVP", "CATIONS": "none", "NUCLEOTIDES": "ATP",
+               "SMOKE": "1", "ENV_ACTIVATE": "true"}
+
+        plan = _run([], env, path, work).stdout
+        assert "chain length: start 65, limits none..160 (soft), mutations: npm" in plan, plan
+        plan = _run([], {**env, "MINLEN": "50", "MUT": "pmo"}, path, work).stdout
+        assert "chain length: start 65, limits 50..160 (soft), mutations: pmo" in plan, plan
+
+        assert _run(["--submit"], env, path, work).returncode == 0
+        assert 'MINLEN=""' in _job_scripts(bindir)[0].read_text()
+
+        res = _run(["--submit"], {**env, "MINLEN": "30"}, path, work)
+        assert res.returncode == 0, res.stderr  # MINLEN does not change the matrix, so no manifest conflict
+        job = _job_scripts(bindir)[-1].read_text()
+        assert 'MINLEN="30"' in job and '${MINLEN:+--seq1_min_len "$MINLEN"}' in job
+
+        # run that job body with the mock fold engine and look at the parameters ames recorded
+        body = "\n".join(line for line in job.splitlines() if "check_env.py" not in line)
+        script = tmp / "job.sh"
+        script.write_text(body.replace("/run_ames_alphabet.py", "/tests/mock_ames.py"))
+        res = subprocess.run(["bash", str(script)], capture_output=True, text=True, cwd=work,
+                             env={**os.environ, "PATH": path, "SLURM_ARRAY_TASK_ID": "0", "SLURM_JOB_ID": "7"})
+        assert res.returncode == 0, res.stdout[-1200:] + res.stderr[-2000:]
+        header = (tmp / "out_smoke/GADVP/ATP/run01/progress.log").read_text().split("gndx\t")[0]
+        assert re.search(r"#--seq1_min_len\s+= 30", header), header[:2000]
+        assert re.search(r"#--seq1_max_len\s+= 160", header)
+
+
 def test_check_env_rejects_esm_that_cannot_load_the_weights():
     sys.path.insert(0, str(ROOT))
     from check_env import esm_version_problem

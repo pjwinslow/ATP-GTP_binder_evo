@@ -221,6 +221,18 @@ the protein and mean nucleotide pLDDT ≥ 70. Both thresholds are arbitrary defa
 ESMFold2's priors. Compare selected runs with `CONTROL=neutral` runs of the same
 nucleotide, alphabet and cation at the same lineage length.
 
+**Chain length can collapse: set a floor.** ames' default lower length limit is −9, which is no
+limit, and its default mutation set (`npm`) contains operators that can shrink a chain a lot in one
+step: `%` deletes a random chunk (up to all but 2 residues) and `r` replaces the whole chain with 3–5
+random residues. The first smoke run on MSI (8 sequences, 12 generations) started at 65 residues
+and ended on a 7-residue peptide (`PPAADDP`). The likely reason, not yet established, is that the
+complex scores (pTM, ipTM, pLDDT) are computed over the protein *and* the ligand atoms, so a tiny chain
+next to ATP can score well and nothing opposes it. Two settings address it: `MINLEN=N` (ames'
+`--seq1_min_len`, a soft limit: the score is multiplied by 0.5 at N residues, 0.95 six above and
+0.05 six below) and `MUT=pmo` (substitutions and single-residue indels only, so a chain changes length
+by one residue at a time). Check `final_metrics.png` (final chain length) and `trajectories.png`
+(chain length along each lineage) for collapse before reading anything else into the scores.
+
 **Alphabets and nucleotide chemistry.** None of the reduced alphabets contains Lys, so
 a canonical Walker A / P-loop `GxxxxGK[ST]` can only appear with `ALL20`
 (`ploop_strict`); `ploop_KR` also accepts Arg. `GADVPSELT` has no basic residue at all,

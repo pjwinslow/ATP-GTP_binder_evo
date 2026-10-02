@@ -234,8 +234,10 @@ ORDINAL = ["#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]  # smallest -> largest al
 FINAL_ROWS = [("nuc_contact_res", "Nucleotide-contacting\nresidues"),
               ("phosphate_contact_res", "Residues touching\nphosphates"),
               ("iptm", "ipTM (ames)"),
-              ("score", "ames score")]
-TRAJ_ROWS = [("score", "ames score"), ("iptm", "ipTM"), ("lcd", "ligand contact density")]
+              ("score", "ames score"),
+              ("seq_len", "Final chain length\n(residues)")]
+TRAJ_ROWS = [("score", "ames score"), ("iptm", "ipTM"), ("lcd", "ligand contact density"),
+             ("seq1_len", "chain length (residues)")]
 
 
 def _style(ax):
@@ -374,7 +376,7 @@ def plot_trajectories(run_dirs: pd.DataFrame, path: Path) -> None:
 
 #=====================================# SUMMARY #=====================================#
 
-METRICS = ["score", "iptm", "iplddt", "plddt", "lcd", "nuc_contact_res", "nuc_atom_contact_frac",
+METRICS = ["seq_len", "score", "iptm", "iplddt", "plddt", "lcd", "nuc_contact_res", "nuc_atom_contact_frac",
            "phosphate_contact_res", "base_contact_res", "ribose_contact_res",
            "ion_contact_res", "ion_coord_number"]
 
