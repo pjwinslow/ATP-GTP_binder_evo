@@ -46,6 +46,8 @@ CHECKS = [  # (module, how to fix)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--gpu", action="store_true", help="fail unless a CUDA device is visible")
+    parser.add_argument("--deep", action="store_true",
+                        help="also load ccd.pkl and confirm ATP, GTP and MG are in it (slow, needs rdkit)")
     args = parser.parse_args()
 
     problems = []
@@ -77,10 +79,27 @@ def main() -> int:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import fetch_hub_files
         for need in fetch_hub_files.status():
-            print(f"{'ok  ' if need.path else 'FAIL'}  {need.label}" + (f": {need.path}" if need.path else " is not available locally"))
+            bad = not need.path or need.problem
+            print(f"{'FAIL' if bad else 'ok  '}  {need.label}" + (f": {need.path}" if need.path else " is not available locally")
+                  + (f" {need.problem}" if need.problem else ""))
             if not need.path:
                 problems.append(f"{need.label} is not available locally; jobs run offline and would die in their first fold. "
                                 f"Fix, on a login node: python fetch_hub_files.py  (see its --help if the hub rate-limits you)")
+            elif need.problem:
+                problems.append(f"{need.label} {need.problem}. Download it again, or run python fetch_hub_files.py")
+            elif args.deep and need.key in ("ccd", "ccd_env"):
+                try:
+                    n, missing, no_conformer = fetch_hub_files.deep_check_ccd(need.path)
+                    wanted = ", ".join(fetch_hub_files.REQUIRED_COMPONENTS)
+                    if missing or no_conformer:
+                        print(f"FAIL  ccd.pkl loads ({n} components) but lacks {', '.join(missing) or 'nothing'}"
+                              f"{'; no conformer for ' + ', '.join(no_conformer) if no_conformer else ''}")
+                        problems.append("ccd.pkl does not contain usable entries for " + wanted + ": wrong or damaged file")
+                    else:
+                        print(f"ok    ccd.pkl loads: {n} components, including {wanted} with conformers")
+                except Exception as err:  # noqa: BLE001
+                    print(f"FAIL  ccd.pkl could not be loaded: {type(err).__name__}: {err}")
+                    problems.append("ccd.pkl cannot be unpickled (truncated download, or rdkit missing): download it again")
     except Exception as err:  # noqa: BLE001 - huggingface_hub problems are reported by the esm import above
         print(f"info  could not check the Hugging Face cache: {type(err).__name__}: {err}")
 

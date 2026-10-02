@@ -107,7 +107,7 @@ MAXLEN="${MAXLEN:-160}"
 MUT="${MUT:-npm}"
 CKPI="${CKPI:-1}"
 HF_OFFLINE="${HF_OFFLINE:-1}"
-CCD_PATH="${CCD_PATH:-}"
+CCD_PATH="${CCD_PATH:-${ESMCFOLD_CCD_PATH:-}}"   # ESMCFOLD_CCD_PATH in your shell works too
 BETA0="${BETA0:-0.8}"
 BETAT="${BETAT:-8.0}"
 CONTROL="${CONTROL:-none}"
@@ -133,6 +133,10 @@ esac
 MANIFEST="$OUTROOT/manifest.tsv"
 # Built here, not with ${VAR:+...} inside the heredoc: bash drops double quotes there, which would break
 # a path containing a space. printf %q escapes it properly.
+if [[ -n "$CCD_PATH" && ! -f "$CCD_PATH" ]]; then
+    echo "ERROR: CCD_PATH / ESMCFOLD_CCD_PATH is set to '$CCD_PATH', which is not a file" >&2
+    exit 1
+fi
 HF_OFFLINE_LINE=""
 [[ "$HF_OFFLINE" == "1" ]] && HF_OFFLINE_LINE="export HF_HUB_OFFLINE=1   # files come from the local cache: no network, no rate limit"
 CCD_LINE=""
@@ -166,6 +170,7 @@ if [[ $SUBMIT == 0 ]]; then
         {printf "%4d  %-8s %-14s %-6s %s\n", $1, $6, $3, $5, $7}'
     echo
     echo "environment: ${ENV_ACTIVATE}   (${ENV_SOURCE})"
+    echo "ccd.pkl:     ${CCD_PATH:-from the Hugging Face cache (python fetch_hub_files.py)}"
     echo "$N_RUNS runs planned: PS=$PS NG=$NG, $PARTITION, $GPUS, $MEM, $TIME, up to $MAX_PARALLEL at once."
     echo "Nothing submitted. Add --submit to submit; --status shows progress afterwards."
     exit 0

@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+REQUIRED_COMPONENTS = ("ATP", "GTP", "MG")  # ligands and ion of the experiment matrix
 MODEL_REPO = "biohub/ESMFold2"
 CCD_FILE = "ccd.pkl"
 PATTERNS = ["*.json", "*.safetensors"]  # what esm's resolve_model_dir asks for
@@ -35,6 +36,7 @@ class Need:
     label: str
     path: str | None          # where it is available locally, None if missing
     repo: str | None = None   # hub repo to fetch it from
+    problem: str | None = None  # set when the file is there but cannot be right
 
 
 def _cached_snapshot(repo: str):
@@ -57,6 +59,36 @@ def _separate_esmc_repo(model_dir: str):
     return config.get("esmc_id") or DEFAULT_ESMC_REPO
 
 
+def ccd_problem(path: str):
+    """Why this file cannot be the CCD pickle, or None. A browser that was rate-limited or redirected can save
+    an HTML page under the right name, and an interrupted download is a truncated file."""
+    try:
+        size = Path(path).stat().st_size
+        with open(path, "rb") as fh:
+            first = fh.read(1)
+    except OSError as err:
+        return f"cannot be read ({err})"
+    if size < 1_000_000:
+        return f"is only {size} bytes, far too small for the component dictionary (an error page saved by the browser?)"
+    if first != b"\x80":
+        return "does not start like a pickle file (an HTML error page saved by the browser?)"
+    return None
+
+
+def deep_check_ccd(path: str, required=REQUIRED_COMPONENTS):
+    """Load the pickle, as esm does (needs rdkit), and report (components, required ones missing, required
+    ones without a conformer). Slow: the dictionary is large."""
+    import pickle
+    with open(path, "rb") as fh:
+        ccd = pickle.load(fh)
+    if not isinstance(ccd, dict):
+        raise ValueError(f"expected a dict of components, got {type(ccd).__name__}")
+    missing = [c for c in required if c not in ccd]
+    no_conformer = [c for c in required if c in ccd and not (hasattr(ccd[c], "GetNumConformers")
+                                                              and ccd[c].GetNumConformers() > 0)]
+    return len(ccd), missing, no_conformer
+
+
 def status() -> list:
     """What a job needs from the hub, and where each item is available locally."""
     needs = []
@@ -68,13 +100,15 @@ def status() -> list:
             needs.append(Need("esmc", f"{esmc_repo} (ESMC backbone)", _cached_snapshot(esmc_repo), esmc_repo))
     ccd_env = os.environ.get("ESMCFOLD_CCD_PATH")
     if ccd_env:
-        needs.append(Need("ccd_env", f"ccd.pkl at ESMCFOLD_CCD_PATH={ccd_env}",
-                          ccd_env if Path(ccd_env).is_file() else None))
+        found = Path(ccd_env).is_file()
+        needs.append(Need("ccd_env", f"ccd.pkl at ESMCFOLD_CCD_PATH={ccd_env}", ccd_env if found else None,
+                          problem=ccd_problem(ccd_env) if found else None))
     else:
         from huggingface_hub import try_to_load_from_cache
         cached = try_to_load_from_cache(MODEL_REPO, CCD_FILE)
-        needs.append(Need("ccd", "ccd.pkl (chemical component dictionary)",
-                          cached if isinstance(cached, str) else None, MODEL_REPO))
+        cached = cached if isinstance(cached, str) else None
+        needs.append(Need("ccd", "ccd.pkl (chemical component dictionary)", cached, MODEL_REPO,
+                          problem=ccd_problem(cached) if cached else None))
     return needs
 
 
@@ -143,10 +177,13 @@ def main() -> int:
         failed = fetch(needs, retries=args.retries)
     needs = status()
     for need in needs:
-        print(f"{'ok  ' if need.path else 'MISSING'}  {need.label}" + (f": {need.path}" if need.path else ""))
-    if all(n.path for n in needs):
+        tag = "MISSING" if not need.path else "BAD" if need.problem else "ok  "
+        print(f"{tag}  {need.label}" + (f": {need.path}" if need.path else "") + (f" {need.problem}" if need.problem else ""))
+    if all(n.path and not n.problem for n in needs):
         print("\nAll files are available locally. Next: python check_env.py")
         return 0
+    if any(n.problem for n in needs):
+        return 1
     if not args.check:
         print("\nCould not fetch: " + "; ".join(failed or [n.label for n in needs if not n.path]))
         print("If the hub is rate-limiting this IP (429): create a free account, make a read token at\n"

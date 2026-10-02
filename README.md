@@ -84,8 +84,13 @@ python check_env.py            # "ccd.pkl ... : /path" should now say ok
 ```
 - If it keeps failing with 429: make a free Hugging Face account and a read token
   (https://huggingface.co/settings/tokens), `export HF_TOKEN=hf_...`, and run it again.
-- If MSI cannot reach the hub: download `https://huggingface.co/biohub/ESMFold2/resolve/main/ccd.pkl`
-  on your own computer, copy it to MSI, and submit with `CCD_PATH=/path/to/ccd.pkl`.
+- If MSI cannot reach the hub, or you keep hitting the limit: download
+  `https://huggingface.co/biohub/ESMFold2/resolve/main/ccd.pkl` on your own computer and copy it to
+  MSI, then `export ESMCFOLD_CCD_PATH=/path/to/ccd.pkl` before `check_env.py` and `submit_matrix.sh`
+  (the submitter passes it to the jobs; `CCD_PATH=` works too, and a path that is not a file is
+  refused). `python check_env.py --deep` loads the file and confirms ATP, GTP and MG are in it with
+  conformers, which catches a truncated download or an HTML error page saved under the right name
+  (the light check that always runs catches the second by size and file header).
 - The jobs run with `HF_HUB_OFFLINE=1` (`HF_OFFLINE=0` to allow downloads), so up to 25 tasks
   starting at once never contact the hub. `check_env.py`, which every job runs first, fails in
   seconds, naming the missing file, if anything is not cached.

@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 import fetch_hub_files as fhf  # noqa: E402
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+PLAUSIBLE_CCD = b"\x80\x04" + b"x" * 1_100_000  # passes the size and pickle-header sanity check of ccd_problem
 
 
 def _fake_repo(hf_home: Path, repo: str, files: dict) -> None:
@@ -26,7 +27,7 @@ def _fake_repo(hf_home: Path, repo: str, files: dict) -> None:
     snap = base / "snapshots" / COMMIT
     snap.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
-        (snap / name).write_text(content)
+        (snap / name).write_bytes(content if isinstance(content, bytes) else content.encode())
 
 
 def _status(hf_home: Path, **env):
@@ -119,11 +120,85 @@ def test_check_env_flags_missing_hub_files_with_the_fix():
         assert "python fetch_hub_files.py" in res.stdout and res.returncode == 1
 
         _fake_repo(home, "biohub/ESMFold2", {"config.json": json.dumps({"esmc_config": {"x": 1}}),
-                                             "model.safetensors": "w", "ccd.pkl": "c"})
+                                             "model.safetensors": "w", "ccd.pkl": PLAUSIBLE_CCD})
         res = subprocess.run([sys.executable, str(ROOT / "check_env.py")], capture_output=True, text=True,
                              env={**env, "HF_HOME": str(home)})
         assert "ok    biohub/ESMFold2 weights:" in res.stdout and "ok    ccd.pkl (chemical component dictionary):" in res.stdout
         assert "fetch_hub_files.py" not in res.stdout  # nothing left to fetch
+
+
+def _write_ccd(path: Path, components: dict, pad: int = 1_200_000) -> Path:
+    """A pickle shaped like ccd.pkl (a dict of component -> molecule), padded past the size sanity check."""
+    import pickle
+    sys.path.insert(0, str(HERE))
+    path.write_bytes(pickle.dumps({**components, "_padding": b"x" * pad}))
+    return path
+
+
+def test_ccd_problem_catches_bad_downloads():
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        good = _write_ccd(t / "ok.pkl", {})
+        assert fhf.ccd_problem(str(good)) is None
+        tiny = t / "tiny.pkl"
+        tiny.write_bytes(b"\x80\x04.")
+        assert "bytes, far too small" in fhf.ccd_problem(str(tiny))
+        html = t / "page.pkl"
+        html.write_text("<html>" + "x" * 2_000_000)
+        assert "HTML error page" in fhf.ccd_problem(str(html))
+        assert "cannot be read" in fhf.ccd_problem(str(t / "nope.pkl"))
+
+
+def test_deep_check_ccd():
+    sys.path.insert(0, str(HERE))
+    from fake_ccd_mol import Mol
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        ok = _write_ccd(t / "a.pkl", {"ATP": Mol(), "GTP": Mol(), "MG": Mol()}, pad=10)
+        assert fhf.deep_check_ccd(str(ok)) == (4, [], [])
+        lacking = _write_ccd(t / "b.pkl", {"ATP": Mol(), "MG": Mol(0)}, pad=10)
+        assert fhf.deep_check_ccd(str(lacking)) == (3, ["GTP"], ["MG"])
+        import pickle
+        (t / "c.pkl").write_bytes(pickle.dumps(["not", "a", "dict"]))
+        try:
+            fhf.deep_check_ccd(str(t / "c.pkl"))
+        except ValueError as err:
+            assert "expected a dict" in str(err)
+        else:
+            raise AssertionError("a list was accepted")
+
+
+def test_check_env_judges_a_manually_downloaded_ccd():
+    from fake_ccd_mol import Mol
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("HF_") and k != "ESMCFOLD_CCD_PATH"}
+        env = {**env, "HF_HOME": str(t / "hf"), "PYTHONPATH": f"{HERE}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"}
+
+        def check(path, *flags):
+            return subprocess.run([sys.executable, str(ROOT / "check_env.py"), *flags], capture_output=True, text=True,
+                                  env={**env, "ESMCFOLD_CCD_PATH": str(path)}).stdout
+
+        good = _write_ccd(t / "good.pkl", {"ATP": Mol(), "GTP": Mol(), "MG": Mol()}, pad=1_200_000)
+        out = check(good)
+        assert f"ccd.pkl at ESMCFOLD_CCD_PATH={good}: {good}" in out and "FAIL  ccd.pkl at" not in out
+        out = check(good, "--deep")
+        assert "ok    ccd.pkl loads: 4 components, including ATP, GTP, MG with conformers" in out, out
+
+        no_gtp = _write_ccd(t / "no_gtp.pkl", {"ATP": Mol(), "MG": Mol()})
+        out = check(no_gtp, "--deep")
+        assert "FAIL  ccd.pkl loads (3 components) but lacks GTP" in out, out
+
+        page = t / "page.pkl"
+        page.write_text("<!DOCTYPE html>" + "x" * 2_000_000)
+        out = check(page)
+        assert "FAIL  ccd.pkl at" in out and "HTML error page" in out and "Download it again" in out, out
+
+        # a pickle cut off mid-file starts correctly and is only caught by loading it
+        truncated = t / "truncated.pkl"
+        truncated.write_bytes(good.read_bytes()[:1_000_100])
+        out = check(truncated, "--deep")
+        assert "FAIL  ccd.pkl could not be loaded" in out, out
 
 
 if __name__ == "__main__":

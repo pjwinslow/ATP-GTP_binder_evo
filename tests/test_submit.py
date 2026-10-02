@@ -38,7 +38,7 @@ def _setup(tmp: Path):
 
 def _run(args, env_extra, path, cwd):
     # blank the conda variables so the result does not depend on the shell running the tests
-    env = {**os.environ, "CONDA_PREFIX": "", "CONDA_EXE": "", "CONDA_ENV": "",
+    env = {**os.environ, "CONDA_PREFIX": "", "CONDA_EXE": "", "CONDA_ENV": "", "ESMCFOLD_CCD_PATH": "", "CCD_PATH": "",
            "PATH": path, "WORKDIR": str(cwd), **env_extra}
     return subprocess.run(["bash", str(SUBMIT), *args], env=env, capture_output=True, text=True, cwd=cwd)
 
@@ -99,17 +99,36 @@ def test_submit_and_run_job_body():
                          "#SBATCH --account=grp", "#SBATCH --cpus-per-task=4"):
             assert expected in job2, expected
 
-        # HF_OFFLINE=0 allows downloads; CCD_PATH hands the jobs a local ccd.pkl
-        res = _run(["--submit"], {**env, "HF_OFFLINE": "0", "CCD_PATH": "/data/ccd.pkl"}, path, work)
+        # HF_OFFLINE=0 allows downloads; CCD_PATH hands the jobs a local ccd.pkl (which must exist)
+        ccd = tmp / "ccd.pkl"
+        ccd.write_text("")
+        res = _run(["--submit"], {**env, "HF_OFFLINE": "0", "CCD_PATH": str(ccd)}, path, work)
         assert res.returncode == 0, res.stderr
         online = _job_scripts(bindir)[-1].read_text()
-        assert "HF_HUB_OFFLINE" not in online and "export ESMCFOLD_CCD_PATH=/data/ccd.pkl\n" in online
+        assert "HF_HUB_OFFLINE" not in online and f"export ESMCFOLD_CCD_PATH={ccd}\n" in online
+
+        # ESMCFOLD_CCD_PATH in the submitting shell is picked up, and the plan shows which file is used
+        res = _run([], {**env, "ESMCFOLD_CCD_PATH": str(ccd)}, path, work)
+        assert f"ccd.pkl:     {ccd}" in res.stdout, res.stdout
+        assert "from the Hugging Face cache" in _run([], env, path, work).stdout
+
+        # a CCD_PATH that is not a file is refused before anything is submitted
+        n_before = len(_job_scripts(bindir))
+        res = _run(["--submit"], {**env, "CCD_PATH": str(tmp / "missing.pkl")}, path, work)
+        assert res.returncode != 0 and "is not a file" in res.stderr and len(_job_scripts(bindir)) == n_before
+
         # a path with a space must still be a single valid assignment in the job script
-        res = _run(["--submit"], {**env, "CCD_PATH": "/data/my files/ccd.pkl"}, path, work)
+        spaced_dir = tmp / "my files"
+        spaced_dir.mkdir()
+        spaced_ccd = spaced_dir / "ccd.pkl"
+        spaced_ccd.write_text("")
+        res = _run(["--submit"], {**env, "CCD_PATH": str(spaced_ccd)}, path, work)
+        assert res.returncode == 0, res.stderr
         spaced = _job_scripts(bindir)[-1].read_text()
-        assert "export ESMCFOLD_CCD_PATH=/data/my\\ files/ccd.pkl\n" in spaced and "export HF_HUB_OFFLINE=1" in spaced
-        assert subprocess.run(["bash", "-c", "export ESMCFOLD_CCD_PATH=/data/my\\ files/ccd.pkl; echo \"$ESMCFOLD_CCD_PATH\""],
-                              capture_output=True, text=True).stdout.strip() == "/data/my files/ccd.pkl"
+        line = next(l for l in spaced.splitlines() if l.startswith("export ESMCFOLD_CCD_PATH="))
+        assert "export HF_HUB_OFFLINE=1" in spaced
+        assert subprocess.run(["bash", "-c", f'{line}; printf %s "$ESMCFOLD_CCD_PATH"'],
+                              capture_output=True, text=True).stdout == str(spaced_ccd)
         for extra in _job_scripts(bindir)[-2:]:
             extra.unlink()  # keep the numbering below
 
