@@ -52,8 +52,16 @@ can break a torch build made against numpy 1.x:
 conda activate esmfold2
 pip install git+https://github.com/sahakyanhk/ames@dd39c57   # the commit these scripts were tested with
 pip install biopython     # imported by ames at start-up but missing from its dependency list
+pip install -U --no-deps "esm>=3.4.1"   # see below
 python check_env.py       # on a login node, everything but the GPU line should say ok
 ```
+**`esm` must be 3.4.1 or newer** (ames declares this for its ESMFold2 engine, but only in an
+optional extra, so installing ames as above does not enforce it). With `esm` 3.4.0 every
+run dies while loading the model with `size mismatch for
+inputs_embedder.atom_attention_encoder.atom_to_token_linear.weight`: 3.4.0 builds that
+layer at half the width of the weights now published as `biohub/ESMFold2`, which 3.4.1 reads
+correctly. `esm` 3.4.1 declares the same dependencies as 3.4.0, so `--no-deps` leaves your
+torch untouched. `check_env.py` reports the version and the fix.
 Pinning `dd39c57` matters: the resume patch rewrites part of ames' main loop and refuses
 to run on a version it does not recognise.
 

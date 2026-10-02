@@ -8,9 +8,25 @@ Prints what is installed and exits non-zero, with the fix, if something is missi
 """
 import argparse
 import importlib
+import importlib.metadata
+import re
 import sys
 
 AMES_PIN = "git+https://github.com/sahakyanhk/ames@dd39c57"
+ESM_MIN = (3, 4, 1)  # ames declares esm>=3.4.1; 3.4.0 cannot load the current biohub/ESMFold2 weights
+ESM_FIX = 'pip install -U --no-deps "esm>=3.4.1"  (same dependencies as 3.4.0; leaves torch alone)'
+
+
+def esm_version_problem(version: str):
+    """Message if this esm release is too old for the published ESMFold2 weights, else None."""
+    numbers = tuple(int(n) for n in re.findall(r"\d+", version)[:3])
+    if numbers < ESM_MIN:
+        return (f"esm {version} is older than {'.'.join(map(str, ESM_MIN))}: it builds the ESMFold2 input encoder "
+                f"at half the width of the published weights and fails with 'size mismatch for "
+                f"inputs_embedder.atom_attention_encoder.atom_to_token_linear.weight'. Fix: {ESM_FIX}")
+    return None
+
+
 CHECKS = [  # (module, how to fix)
     ("numpy", f"pip install {AMES_PIN}"),
     ("pandas", f"pip install {AMES_PIN}"),
@@ -46,6 +62,15 @@ def main() -> int:
             problems.append(f"{module}: {fix}")
         if module == "ames" and "ames" not in sys.modules:
             break  # evolution / pdb_contacts need the package's directory on sys.path
+
+    try:
+        esm_version = importlib.metadata.version("esm")
+        problem = esm_version_problem(esm_version)
+        print(f"{'FAIL' if problem else 'ok  '}  esm distribution {esm_version}")
+        if problem:
+            problems.append(problem)
+    except importlib.metadata.PackageNotFoundError:
+        pass  # the esm.models.esmfold2 import above already reported it
 
     try:
         import torch

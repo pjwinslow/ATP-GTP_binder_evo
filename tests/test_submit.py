@@ -132,6 +132,16 @@ def test_submit_and_run_job_body():
         assert "2 done" in res.stdout and "unfinished indices: 1,2" in res.stdout, res.stdout
 
 
+def test_check_env_rejects_esm_that_cannot_load_the_weights():
+    sys.path.insert(0, str(ROOT))
+    from check_env import esm_version_problem
+    for old in ("3.4.0", "3.2.1.post1", "3.0.8", "2.0.0"):
+        message = esm_version_problem(old)
+        assert message and "pip install -U --no-deps" in message and "size mismatch" in message, old
+    for fine in ("3.4.1", "3.4.1.post1", "3.4.2", "3.5.0", "4.0.0"):
+        assert esm_version_problem(fine) is None, fine
+
+
 def test_check_env_reports_problems_with_fixes():
     res = subprocess.run([sys.executable, str(ROOT / "check_env.py")], capture_output=True, text=True)
     assert res.stdout.startswith("python 3.")
