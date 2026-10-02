@@ -17,7 +17,7 @@
 # from their last checkpoint (ames has no resume of its own: see ames_resume.py), and a
 # finished run is skipped, so resubmitting is always safe.
 #
-#   SMOKE=1 bash submit_matrix.sh --submit      # tiny test: 8 sequences x 4 generations, 30 min
+#   SMOKE=1 bash submit_matrix.sh --submit      # tiny test: 8 sequences x 12 generations, 1 h
 #   CONTROL=neutral bash submit_matrix.sh --submit   # no-selection null (same settings otherwise)
 #
 # --status, resubmitting and the plan must see the same settings as the original submit
@@ -89,7 +89,7 @@ for nuc in $NUCLEOTIDES; do
     [[ "$nuc" == "ATP" || "$nuc" == "GTP" ]] || { echo "NUCLEOTIDES: ATP and GTP only, got '$nuc'" >&2; exit 1; }
 done
 if [[ "$SMOKE" == "1" ]]; then
-    PS=8; NG=4; TIME=00:30:00; REPS=1
+    PS=8; NG=12; TIME=01:00:00; REPS=1   # 12 > 10: ames prints its timing line at generation 10
     OUTROOT="${OUTROOT}_smoke"; JOB_NAME="${JOB_NAME}_smoke"
 fi
 ANN_S="${ANN_S:-$((NG * 15 / 100))}"

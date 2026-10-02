@@ -69,18 +69,21 @@ The Slurm settings are those of your working MSI script: `preempt-gpu`, `gpu:1`,
 logs in `logs/`. Override any of them with environment variables (see the header of
 `submit_matrix.sh`); `MAIL_USER=you@umn.edu` turns on the one end/fail mail per array.
 
-1. **Smoke test** (8 sequences × 4 generations, 30 min): confirms the environment,
-   ESMFold2, ligand input and `visualames` work, and shows the throughput. With the
+1. **Smoke test** (8 sequences × 12 generations, 1 h): confirms the environment,
+   ESMFold2, ligand input and `visualames` work, and measures the speed. With the
    default `NUCLEOTIDES` it runs one job per nucleotide, which also confirms that
    ESMFold2 accepts both ligands:
 
    ```bash
    SMOKE=1 ALPHABETS=GADVP CATIONS=MG bash submit_matrix.sh --submit
    ```
-   ames prints `#N generations per day` every 10 generations in each task's
-   `logs/*.out`. **Size `NG`, `PS` and the number of 24-hour slots from that number
-   before launching the matrix.** A run folds `PS × NG` sequences one after another
-   (default 100 × 1000 = 100,000).
+   ames prints a timing line (`#X.Xs per generation`) at generation 10, so it appears in
+   each task's `logs/*.out` only because the smoke test runs 12 generations. That time is
+   for 8 sequences; a real generation folds `PS` sequences one after another, so expect
+   about X × PS/8 seconds per generation and X × (PS/8) × NG seconds per run (100 × 1000
+   = 100,000 folds by default). Fold time also grows with chain length, so treat it as a
+   floor. **Size `NG`, `PS` and the number of 24-hour slots from that before launching the
+   matrix.**
 
 2. **Plan, submit, monitor.** Without `--submit` the script only prints the plan.
 

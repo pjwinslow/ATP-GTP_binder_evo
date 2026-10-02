@@ -71,7 +71,7 @@ def test_submit_and_run_job_body():
         assert res.returncode == 0 and "Submitting 4 jobs (array 0-3%25)" in res.stdout, res.stdout + res.stderr
         job = _job_scripts(bindir)[0].read_text()
         for expected in ("#SBATCH --partition=preempt-gpu", "#SBATCH --gres=gpu:1", "#SBATCH --mem=40G",
-                         "#SBATCH --time=00:30:00",  # SMOKE; the real default is 24:00:00
+                         "#SBATCH --time=01:00:00",  # SMOKE; the real default is 24:00:00
                          "#SBATCH --array=0-3%25", "#SBATCH --requeue", "#SBATCH --open-mode=append",
                          "#SBATCH --job-name=nuc_evo_smoke", "--resume"):
             assert expected in job, expected
