@@ -51,7 +51,10 @@ def main() -> int:
         return 2
     manifest = Path(sys.argv[1])
     if not manifest.exists():
-        print(f"no manifest at {manifest}: nothing has been submitted with these settings", file=sys.stderr)
+        print(f"no manifest at {manifest}: nothing has been submitted to that output directory.\n"
+              f"Pass the directory the runs were submitted to, e.g. bash submit_matrix.sh --status outputs/pilot "
+              f"(manifests found: {', '.join(str(p) for p in sorted(Path('outputs').glob('*/manifest.tsv'))) or 'none under outputs/'})",
+              file=sys.stderr)
         return 1
     with open(manifest) as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))

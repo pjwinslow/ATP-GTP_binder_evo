@@ -143,6 +143,16 @@ def test_submit_and_run_job_body():
         res = _run(["--status"], env, path, work)
         assert res.returncode == 0 and "4 not started" in res.stdout and "unfinished indices: 0,1,2,3" in res.stdout, res.stdout
 
+        # --status can be pointed at the output directory (or manifest) of runs submitted elsewhere
+        out_dir = Path(base["OUTROOT"] + "_smoke")
+        elsewhere = {**env, "OUTROOT": str(tmp / "somewhere_else")}
+        assert "no manifest" in _run(["--status"], elsewhere, path, work).stderr
+        for target in (str(out_dir), str(out_dir) + "/", str(out_dir / "manifest.tsv")):
+            res = _run(["--status", target], elsewhere, path, work)
+            assert res.returncode == 0 and "4 not started" in res.stdout, (target, res.stdout, res.stderr)
+        res = _run(["--status", str(tmp / "nope")], elsewhere, path, work)
+        assert res.returncode != 0 and "Pass the directory the runs were submitted to" in res.stderr
+
         # run the job body for tasks 0 (ATP) and 3 (GTP+MG) with the mock fold engine
         body = _job_scripts(bindir)[0].read_text()
         body = "\n".join(line for line in body.splitlines() if "check_env.py" not in line)  # no GPU here

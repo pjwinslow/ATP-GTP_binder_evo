@@ -11,6 +11,7 @@
 #   bash submit_matrix.sh                       # print the plan only
 #   bash submit_matrix.sh --submit              # submit all runs
 #   bash submit_matrix.sh --status              # progress of every run + unfinished indices
+#   bash submit_matrix.sh --status outputs/pilot   # ... for runs submitted to another OUTROOT
 #   bash submit_matrix.sh --submit 12,45,99     # resubmit only these array indices
 #
 # Preempted or requeued jobs, and runs that hit the walltime and are resubmitted, RESUME
@@ -171,7 +172,12 @@ length_warnings() {
 }
 
 if [[ $STATUS == 1 ]]; then
-    exec python3 "$HERE/run_status.py" "$MANIFEST"
+    # --status <dir> or <manifest.tsv>: look at runs submitted to another OUTROOT (pilot, smoke, neutral, ...)
+    target="$MANIFEST"
+    if [[ -n "$ARRAY_ARG" ]]; then
+        if [[ -d "$ARRAY_ARG" ]]; then target="${ARRAY_ARG%/}/manifest.tsv"; else target="$ARRAY_ARG"; fi
+    fi
+    exec python3 "$HERE/run_status.py" "$target"
 fi
 
 N_RUNS=$(( $(manifest_text | wc -l) - 1 ))
