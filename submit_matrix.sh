@@ -29,8 +29,12 @@
 #   Slurm     PARTITION [preempt-gpu]  TIME [24:00:00]  MEM [40G]  GPUS [gpu:1]
 #             MAX_PARALLEL [25] simultaneous array tasks   CPUS [unset]   ACCOUNT [unset]
 #             MAIL_USER [unset: no mail]  MAIL_TYPE [END,FAIL] (one mail per array, not per task)
-#   Environment  CONDA_SH [/common/software/.../python3-2020.07-mamba/etc/profile.d/conda.sh]
-#             CONDA_ENV [esmfold2]   or ENV_ACTIVATE='any command that activates the env'
+#   Environment  By default the jobs activate the conda environment that is active in the
+#             shell you submit from (its own conda.sh and path), so submit from the shell
+#             where `python check_env.py` passes. Overrides, in this order:
+#             ENV_ACTIVATE='any command that activates the env'
+#             CONDA_ENV=name [with CONDA_SH=/path/to/conda.sh, default: the MSI anaconda's]
+#             With no env active and none given: CONDA_SH + environment "esmfold2".
 #   Layout    WORKDIR [directory of this script]  OUTROOT [$WORKDIR/outputs/nuc_matrix]
 #   Matrix    NUCLEOTIDES [ATP GTP]  ALPHABETS [GADVP GADVPSELT GADVPSELTRIQN ALL20]
 #             CATIONS [none MG]  REPS [3]
@@ -64,8 +68,19 @@ ACCOUNT="${ACCOUNT:-}"
 MAIL_USER="${MAIL_USER:-}"
 MAIL_TYPE="${MAIL_TYPE:-END,FAIL}"
 CONDA_SH="${CONDA_SH:-/common/software/install/migrated/anaconda/python3-2020.07-mamba/etc/profile.d/conda.sh}"
-CONDA_ENV="${CONDA_ENV:-esmfold2}"
-ENV_ACTIVATE="${ENV_ACTIVATE:-source ${CONDA_SH} && conda activate ${CONDA_ENV}}"
+if [[ -n "${ENV_ACTIVATE:-}" ]]; then
+    ENV_SOURCE="ENV_ACTIVATE"
+elif [[ -n "${CONDA_ENV:-}" ]]; then
+    ENV_ACTIVATE="source ${CONDA_SH} && conda activate ${CONDA_ENV}"
+    ENV_SOURCE="CONDA_ENV=${CONDA_ENV}"
+elif [[ -n "${CONDA_PREFIX:-}" && -n "${CONDA_EXE:-}" ]]; then
+    # the environment active in this shell, through the conda installation that owns it
+    ENV_ACTIVATE="source $(dirname "$(dirname "${CONDA_EXE}")")/etc/profile.d/conda.sh && conda activate ${CONDA_PREFIX}"
+    ENV_SOURCE="the conda environment active in this shell"
+else
+    ENV_ACTIVATE="source ${CONDA_SH} && conda activate esmfold2"
+    ENV_SOURCE="default: no environment active, no CONDA_ENV given"
+fi
 
 NUCLEOTIDES="${NUCLEOTIDES:-ATP GTP}"
 ALPHABETS="${ALPHABETS:-GADVP GADVPSELT GADVPSELTRIQN ALL20}"
@@ -128,6 +143,7 @@ if [[ $SUBMIT == 0 ]]; then
     manifest_text | awk -F'\t' 'NR == 1 {printf "%4s  %-8s %-14s %-6s %s\n", "idx", "ligand", "alphabet", "rep", "run directory"; next}
         {printf "%4d  %-8s %-14s %-6s %s\n", $1, $6, $3, $5, $7}'
     echo
+    echo "environment: ${ENV_ACTIVATE}   (${ENV_SOURCE})"
     echo "$N_RUNS runs planned: PS=$PS NG=$NG, $PARTITION, $GPUS, $MEM, $TIME, up to $MAX_PARALLEL at once."
     echo "Nothing submitted. Add --submit to submit; --status shows progress afterwards."
     exit 0
@@ -173,7 +189,7 @@ ${MAIL_USER:+#SBATCH --mail-type=${MAIL_TYPE}}
 ${MAIL_USER:+#SBATCH --mail-user=${MAIL_USER}}
 
 # ── Environment (strict mode only after conda: its activate scripts are not 'set -u' clean)
-${ENV_ACTIVATE}
+${ENV_ACTIVATE} || { echo "ERROR: could not activate the environment; check CONDA_ENV / CONDA_SH / ENV_ACTIVATE in submit_matrix.sh" >&2; exit 1; }
 export PYTHONNOUSERSITE=1
 
 # ── Settings fixed at submit time

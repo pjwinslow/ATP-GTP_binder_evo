@@ -42,9 +42,14 @@ ames needs **Python ≥ 3.12** (`rnatools.py` uses an f-string syntax that is a
 `SyntaxError` on 3.11 and older, although ames' README says ≥ 3.10) and a C++17
 compiler (`module load gcc`) to build its contact-calculation extension.
 
-The jobs use the conda environment `esmfold2` (activated with the MSI `conda.sh` that
-`submit_matrix.sh` defaults to; override with `CONDA_SH`/`CONDA_ENV`, or `ENV_ACTIVATE` for
-any other activation command). It needs ames and biopython on top of ESMFold2. If you add
+The jobs activate **the conda environment that is active in the shell you submit from**
+(through the conda installation that owns it), so activate your ESMFold2 environment, check
+it with `python check_env.py`, and submit from that same shell. `bash submit_matrix.sh`
+prints the exact activation command it will use (`environment: …`). To use something else:
+`CONDA_ENV=name` (looked up in the MSI anaconda; `CONDA_SH=/path/to/conda.sh` for another
+conda) or `ENV_ACTIVATE='any command'`. If the activation fails the job stops with an error,
+instead of running on whatever `python` happens to be on the path. The environment needs
+ames and biopython on top of ESMFold2. If you add
 them to a **copy** of the environment you protect it from ames' `numpy>=2.0` pin, which
 can break a torch build made against numpy 1.x:
 

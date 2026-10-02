@@ -37,7 +37,9 @@ def _setup(tmp: Path):
 
 
 def _run(args, env_extra, path, cwd):
-    env = {**os.environ, "PATH": path, "WORKDIR": str(cwd), **env_extra}
+    # blank the conda variables so the result does not depend on the shell running the tests
+    env = {**os.environ, "CONDA_PREFIX": "", "CONDA_EXE": "", "CONDA_ENV": "",
+           "PATH": path, "WORKDIR": str(cwd), **env_extra}
     return subprocess.run(["bash", str(SUBMIT), *args], env=env, capture_output=True, text=True, cwd=cwd)
 
 
@@ -130,6 +132,43 @@ def test_submit_and_run_job_body():
 
         res = _run(["--status"], env, path, work)
         assert "2 done" in res.stdout and "unfinished indices: 1,2" in res.stdout, res.stdout
+
+
+def test_environment_selection_and_failed_activation():
+    with tempfile.TemporaryDirectory(prefix="ames_env_") as t:
+        tmp = Path(t)
+        bindir, path = _setup(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        base = {"OUTROOT": str(tmp / "out"), "ALPHABETS": "GADVP", "CATIONS": "none", "REPS": "1",
+                "NUCLEOTIDES": "ATP"}
+        active = {"CONDA_PREFIX": "/users/me/miniforge3/envs/esmfold2", "CONDA_EXE": "/users/me/miniforge3/bin/conda"}
+
+        # the environment active in the submitting shell is used, through the conda installation that owns it
+        out = _run([], {**base, **active}, path, work).stdout
+        assert ("environment: source /users/me/miniforge3/etc/profile.d/conda.sh && "
+                "conda activate /users/me/miniforge3/envs/esmfold2") in out and "active in this shell" in out
+        assert "/common/software" not in out
+
+        # CONDA_ENV names an environment in the MSI conda instead
+        out = _run([], {**base, **active, "CONDA_ENV": "other"}, path, work).stdout
+        assert "/common/software" in out and "conda activate other" in out
+
+        # ENV_ACTIVATE wins over everything
+        out = _run([], {**base, **active, "CONDA_ENV": "other", "ENV_ACTIVATE": "module load x"}, path, work).stdout
+        assert "environment: module load x" in out
+
+        # nothing active and nothing given: the MSI conda.sh and esmfold2
+        out = _run([], base, path, work).stdout
+        assert "/common/software" in out and "conda activate esmfold2" in out
+
+        # a failed activation stops the job with an explanation instead of running on whatever python is on PATH
+        res = _run(["--submit"], {**base, "ENV_ACTIVATE": "false", "SMOKE": "1"}, path, work)
+        assert res.returncode == 0, res.stderr
+        job = _job_scripts(bindir)[0]
+        res = subprocess.run(["bash", str(job)], capture_output=True, text=True, cwd=work,
+                             env={**os.environ, "PATH": path, "SLURM_ARRAY_TASK_ID": "0", "SLURM_JOB_ID": "1"})
+        assert res.returncode == 1 and "could not activate the environment" in res.stderr, res.stderr
 
 
 def test_check_env_rejects_esm_that_cannot_load_the_weights():
