@@ -5,7 +5,8 @@
 
 Runs ATP and GTP conditions, with and without Mg, and cross-checks the summarizer's
 independently implemented nucleotide contact count against the ``lcd`` that ames' C++
-code logged for the same structure.
+code logged for the same structure. Runs with --score-nucleotide-only must have an ``lcd``
+equal to the nucleotide's alone even though an ion is present.
 """
 import argparse
 import os
@@ -30,17 +31,25 @@ RUNS = [  # (root, alphabet, condition dir, ligand, selection args)
     ("sel", "GADVPSELT", "GTP_MG", "GTP,MG", ["-b0", "3"]),
     ("neutral", "GADVP", "ATP_MG", "ATP,MG", ["-b0", "0"]),
     ("neutral", "GADVP", "GTP_MG", "GTP,MG", ["-b0", "0"]),
+    # the ion sits on the protein, away from the nucleotide: pooled scoring rewards it, nucleotide-only does not
+    ("ionprot", "GADVP", "ATP_MG", "ATP,MG", ["-b0", "3"]),
+    ("nuconly", "GADVP", "ATP_MG", "ATP,MG", ["-b0", "3", "--score-nucleotide-only"]),
+    ("nuconly", "GADVPSELT", "GTP_MG", "GTP,MG", ["-b0", "3", "--score-nucleotide-only"]),
 ]
+ION_ON_PROTEIN = ("ionprot", "nuconly")
 
 
-def run(cmd, env):
+def run(cmd, env) -> str:
     res = subprocess.run([str(c) for c in cmd], env=env, capture_output=True, text=True)
     if res.returncode:
         sys.exit(f"FAILED: {' '.join(map(str, cmd))}\n{res.stdout[-2000:]}\n{res.stderr[-3000:]}")
+    return res.stdout
 
 
 def one_run(out: Path, spec, env) -> str:
     root, alphabet, cond, ligand, sel = spec
+    if root in ION_ON_PROTEIN:
+        env = {**env, "MOCK_ION_ON_PROTEIN": "1"}
     rd = out / root / alphabet / cond / "run01"
     run([sys.executable, HERE / "mock_ames.py", "--alphabet", alphabet,
          "--iseq1", "protein:randoms:40:evolv", "--seq1_rate", "1", "--ligand", ligand,
@@ -64,20 +73,34 @@ def main() -> None:
             print("ran", name)
 
     summary = out / "summary"
-    run([sys.executable, HERE.parent / "summarize_matrix.py", out / "sel", out / "neutral", "--out", summary], env)
+    printed = run([sys.executable, HERE.parent / "summarize_matrix.py", out / "sel", out / "neutral", out / "ionprot",
+                   out / "nuconly", "--out", summary], env)
+    assert "WARNING: runs with a cation were scored differently" in printed, printed
     runs = pd.read_csv(summary / "runs.csv")
-    print(runs[["selection", "nucleotide", "alphabet", "cation", "score_first", "score", "lcd", "nuc_lcd",
+    print(runs[["selection", "nucleotide", "alphabet", "cation", "ligand_scoring", "score_first", "score", "lcd",
+                "nuc_lcd",
                 "nuc_contact_res", "base_contact_res", "ion_contact_res", "ion_coord_number"]]
           .round(3).to_string(index=False))
 
     assert len(runs) == len(RUNS)
+    nuc_only_dir = runs.run.str.contains("/nuconly/")
+    assert nuc_only_dir.sum() == 2 and (runs[nuc_only_dir].cation == "MG").all()
+    assert (runs[nuc_only_dir].ligand_scoring == "nucleotide").all()
+    ion_runs = runs[(runs.cation != "none") & ~nuc_only_dir]
+    assert len(ion_runs) and (ion_runs.ligand_scoring == "nucleotide+ion").all()
+    assert (runs[runs.cation == "none"].ligand_scoring == "nucleotide").all()
+    # the point of --score-nucleotide-only: the ion really does touch the protein in these runs, and still
+    # does not enter the score (checked below against ames' own lcd)
+    on_protein = runs[runs.run.str.contains("/ionprot/|/nuconly/")]
+    assert len(on_protein) == 3 and (on_protein.ion_contact_res > 0).all(), on_protein.ion_contact_res.tolist()
     assert set(runs.nucleotide) == {"ATP", "GTP"} and set(runs.cation) == {"none", "MG"}
     assert runs.alphabet_ok.all(), "a final sequence left its alphabet"
     assert (runs.nuc_atoms == runs.nucleotide.map(N_HEAVY)).all(), "wrong nucleotide atom count"
     assert (runs.nuc_atoms_unrecognized == 0).all()
     for _, r in runs.iterrows():
         n = N_HEAVY[r.nucleotide]
-        if r.cation == "none":  # ames lcd = contacting pairs / ligand atoms; the nucleotide is the only ligand
+        if r.ligand_scoring == "nucleotide":
+            # ames lcd = contacting pairs / ligand atoms; only the nucleotide is scored (no ion, or the ion left out)
             assert abs(r.lcd - r.nuc_lcd) < 6e-4, ("lcd mismatch", r.run, r.lcd, r.nuc_lcd)
         else:                   # ligand = nucleotide + 1 ion; residues touching both are counted twice
             pairs = r.nuc_contact_res + r.ion_contact_res

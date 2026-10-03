@@ -6,6 +6,7 @@ The job body is run for two array tasks with the real launcher/ames/visualames b
 fold engine (and without the GPU check), then --status and the skip-if-DONE path are checked.
 """
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -240,7 +241,6 @@ def test_environment_selection_and_failed_activation():
 
 
 def test_min_length_reaches_ames():
-    import re
     with tempfile.TemporaryDirectory(prefix="ames_minlen_") as t:
         tmp = Path(t)
         bindir, path = _setup(tmp)
@@ -277,6 +277,45 @@ def test_min_length_reaches_ames():
         header = (tmp / "out_smoke/GADVP/ATP/run01/progress.log").read_text().split("gndx\t")[0]
         assert re.search(r"#--seq1_min_len\s+= 30", header), header[:2000]
         assert re.search(r"#--seq1_max_len\s+= 160", header)
+
+
+def test_score_ligands_setting():
+    with tempfile.TemporaryDirectory(prefix="ames_scoreligands_") as t:
+        tmp = Path(t)
+        bindir, path = _setup(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        env = {"OUTROOT": str(tmp / "out"), "ALPHABETS": "GADVP", "NUCLEOTIDES": "ATP", "SMOKE": "1",
+               "MINLEN": "50", "MUT": "pmo", "ENV_ACTIVATE": "true"}
+        note = "NOTE: SCORE_LIGANDS=all: ames pools the ion"
+
+        # default: ames' own pooled scoring, with a note when an ion is in the matrix
+        plan = _run([], {**env, "CATIONS": "none MG"}, path, work).stdout
+        assert note in plan, plan
+        assert note not in _run([], {**env, "CATIONS": "none"}, path, work).stdout  # nothing to pool
+        assert note not in _run([], {**env, "CATIONS": "none MG", "SCORE_LIGANDS": "nucleotide"}, path, work).stdout
+        assert note in _run([], {**env, "CATIONS": "none MG MN"}, path, work).stdout
+
+        assert _run(["--submit"], {**env, "CATIONS": "none MG"}, path, work).returncode == 0
+        assert 'SCORE_FLAG=""' in _job_scripts(bindir)[-1].read_text()
+        res = _run(["--submit"], {**env, "CATIONS": "none MG", "SCORE_LIGANDS": "nucleotide"}, path, work)
+        assert res.returncode == 0, res.stderr  # not part of the manifest, so no conflict with the first submit
+        job = _job_scripts(bindir)[-1].read_text()
+        assert 'SCORE_FLAG="--score-nucleotide-only"' in job and "${SCORE_FLAG} --engine esmfold2" in job
+
+        # run that job body: the launcher sees the flag and ames records that only chain B was scored
+        body = "\n".join(line for line in job.splitlines() if "check_env.py" not in line)
+        script = tmp / "job.sh"
+        script.write_text(body.replace("/run_ames_alphabet.py", "/tests/mock_ames.py"))
+        res = subprocess.run(["bash", str(script)], capture_output=True, text=True, cwd=work,
+                             env={**os.environ, "PATH": path, "SLURM_ARRAY_TASK_ID": "1", "SLURM_JOB_ID": "9"})
+        assert res.returncode == 0, res.stdout[-1200:] + res.stderr[-2000:]
+        assert "#scoring: ligand contacts and interface pLDDT on chain B only" in res.stderr, res.stderr[-800:]
+        log = next((tmp / "out_smoke/GADVP").glob("ATP_MG/run01/progress.log")).read_text()
+        assert re.search(r"#--ligand_chains\s+= B\n", log), log[:1500]
+
+        res = _run(["--submit"], {**env, "SCORE_LIGANDS": "both"}, path, work)
+        assert res.returncode != 0 and "SCORE_LIGANDS must be all or nucleotide" in res.stderr
 
 
 def test_check_env_rejects_esm_that_cannot_load_the_weights():

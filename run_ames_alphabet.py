@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run ames with a reduced amino-acid alphabet.
 
-    run_ames_alphabet.py --alphabet GADVP [--no-rate-normalize] [--resume] <ames arguments>
+    run_ames_alphabet.py --alphabet GADVP [--no-rate-normalize] [--resume] [--score-nucleotide-only] <ames arguments>
 
 Registers the alphabet in ames' ``Evolver`` (see ames_alphabets.py) and then
 runs ames' own entry point with ``-pa1 <alphabet>`` added. ames is not modified.
@@ -30,6 +30,9 @@ def main() -> None:
                         help=f"one of {', '.join(ALPHABETS)} or an explicit letter set")
     parser.add_argument("--no-rate-normalize", action="store_true",
                         help="ames' native weights (1 per letter) instead of 20/N per letter")
+    parser.add_argument("--score-nucleotide-only", action="store_true",
+                        help="score ligand contacts and interface pLDDT on the first --ligand only (the nucleotide); "
+                             "ames pools all ligand chains, so with an ion present binding the ion alone is rewarded")
     parser.add_argument("--resume", action="store_true",
                         help="continue from <outpath>/progress.ckp if it exists (otherwise start fresh)")
     own, ames_args = parser.parse_known_args()
@@ -58,6 +61,14 @@ def main() -> None:
     from ames.ames import main as ames_main  # setup runs at import, reads sys.argv
     if own.resume:
         ames_resume.patch_simulator(sys.modules["ames.ames"])
+    if own.score_nucleotide_only:
+        ames_args_ns = sys.modules["ames.ames"].args  # read at scoring time: ligand_contact_density and ligand ipLDDT
+        chains = getattr(ames_args_ns, "ligand_chains", None)
+        if not chains:
+            sys.exit("ERROR: --score-nucleotide-only needs --ligand NUCLEOTIDE[,ION]")
+        ames_args_ns.ligand_chains = chains.split(",")[0]
+        print(f"#scoring: ligand contacts and interface pLDDT on chain {ames_args_ns.ligand_chains} only "
+              f"(ames default: {chains})", file=sys.stderr)
     ames_main()
 
 

@@ -98,6 +98,10 @@ def _check_compatible(header: dict, args) -> None:
         if header.get(key) != getattr(args, key):
             raise RuntimeError(f"cannot resume: checkpoint has {key}={header.get(key)!r}, "
                                f"this run has {getattr(args, key)!r}. Use a new output directory.")
+    if str(header.get("ligand_chains")) != str(getattr(args, "ligand_chains", None)):
+        raise RuntimeError(f"cannot resume: checkpoint scored ligand chains {header.get('ligand_chains')!r}, "
+                           f"this run scores {str(getattr(args, 'ligand_chains', None))!r} "
+                           f"(--score-nucleotide-only differs). Use a new output directory.")
     if str(header.get("ligand")) != str(args.ligand):
         raise RuntimeError(f"cannot resume: checkpoint has ligand={header.get('ligand')!r}, "
                            f"this run has {str(args.ligand)!r}. Use a new output directory.")

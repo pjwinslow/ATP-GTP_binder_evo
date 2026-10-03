@@ -128,6 +128,7 @@ logs in `logs/`. Override any of them with environment variables (see the header
    bash submit_matrix.sh --submit 12,45,99     # resubmit just those indices (they resume)
    NUCLEOTIDES=GTP bash submit_matrix.sh       # 24 runs, GTP only
    CONTROL=neutral NG=200 bash submit_matrix.sh --submit   # the no-selection null
+   SCORE_LIGANDS=nucleotide OUTROOT=outputs/nuc_only bash submit_matrix.sh --submit   # ion not scored
    ```
    `--status`, resubmits and the plan must use the same settings as the original submit:
    array indices refer to `outputs/nuc_matrix/manifest.tsv`, and a submit whose settings
@@ -152,7 +153,8 @@ preempted run from scratch, so the launcher is run with `--resume` (`ames_resume
   needs more than one slot ends as `TIMEOUT`: use `--status` and resubmit the unfinished
   indices; they continue from their checkpoint.
 - A finished run (`DONE` present) is skipped, so resubmitting everything is safe.
-- A checkpoint made with a different alphabet, ligand or population size is refused.
+- A checkpoint made with a different alphabet, ligand, population size or scoring mode
+  (`--score-nucleotide-only`) is refused.
 - Not restored: ames' memo of already-folded sequences (a few sequences may be folded
   twice) and the random-number state, so a resumed run is statistically equivalent to,
   not bit-identical with, an uninterrupted one.
@@ -200,6 +202,23 @@ contacts, plus the ion coordination number (O/N within 2.8 Å). For nucleotide-o
 runs `nuc_lcd` equals ames' `lcd`, and for nucleotide+ion runs
 `lcd × (heavy atoms + 1) = nuc_contact_res + ion_contact_res`; `tests/run_mock_e2e.py`
 asserts both for ATP and GTP against ames' C++ code.
+
+**Pooling also means an ion can be bound instead of the nucleotide.** Selection acts on
+ames' pooled `lcd` and `iplddt`, so in a `NUC,MG` run, contacts with Mg alone raise the
+score; no ATP contact is needed. This happened in the pilot (`PS=32`, `NG=100`, ATP+Mg):
+the final GADVP chain had `lcd` 0.188 × 32 = 6 contacting pairs but 0 ATP-contacting
+residues, so all six were Mg contacts, while the ALL20 chain had `lcd` 0.312 × 32 = 10
+pairs, 9 of them ATP-contacting residues and 1 an Mg contact.
+
+To make selection act on the nucleotide alone, run with `SCORE_LIGANDS=nucleotide`
+(launcher flag `--score-nucleotide-only`): ames then counts ligand contacts and interface
+pLDDT on the nucleotide chain only, and the ion stays in the folded complex. It is off by
+default, because the pooled score is ames' own and "does an ion help ATP binding evolve"
+is a different question from "does it help a protein bind an ion". Use a separate
+`OUTROOT` for each scoring mode: a checkpoint made in one mode is refused by the other,
+`progress.log` records `ligand_chains` (`B` = nucleotide only, `B,C` = pooled), and
+`summarize_matrix.py` adds a `ligand_scoring` column and warns when runs with a cation
+were scored differently.
 
 **ATP and GTP differ only in the base.** The phosphate chain and ribose have identical
 atom names; adenine has `N6`, guanine has `O6` and `N2`. `base_contact_res` counts
@@ -278,7 +297,7 @@ python tests/test_hub_files.py            # fake Hugging Face cache; needs huggi
 python tests/run_mock_e2e.py              # ~1 min on 4 cores: launcher → ames → visualames → summarizer, mock fold engine
 ```
 The mock engine (`tests/mock_esmfold2_runner.py`) builds synthetic protein + nucleotide
-(+ Mg) structures and returns made-up confidences, so it exercises the plumbing and the
+(+ Mg, optionally on the far side of the protein) structures and returns made-up confidences, so it exercises the plumbing and the
 scoring path for both nucleotides, not ESMFold2 or any biology. Slurm itself is not
 available here: the generated job script is checked against a fake `sbatch`, and its body
 is run directly, so the first real submission (the smoke test) is the check of the

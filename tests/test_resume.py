@@ -3,6 +3,7 @@
     python tests/test_resume.py        # ~40 s; needs ames installed (python >= 3.12 env)
 """
 import hashlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,11 +32,11 @@ def _expected_beta(gen: int) -> float:
     return beta
 
 
-def _ames_cmd(outdir: Path, ligand="GTP,MG"):
-    return [sys.executable, str(HERE / "mock_ames.py"), "--alphabet", "GADVP", "--resume",
+def _ames_cmd(outdir: Path, ligand="GTP,MG", extra=(), ng=NG):
+    return [sys.executable, str(HERE / "mock_ames.py"), "--alphabet", "GADVP", "--resume", *extra,
             "--iseq1", "protein:randoms:30:evolv", "--ligand", ligand,
             "--helix_len_penalty", "1000", "--strand_len_penalty", "1000",
-            "-ps", str(PS), "-ng", str(NG), "-ckpi", "1",
+            "-ps", str(PS), "-ng", str(ng), "-ckpi", "1",
             "-b0", str(B0), "-ann", "-bt", str(BT), "-ann_s", str(ANN_S), "-ann_e", str(ANN_E),
             "--engine", "esmfold2", "-o", str(outdir)]
 
@@ -136,6 +137,42 @@ def test_kill_and_resume():
         res = subprocess.run(_ames_cmd(out, ligand="ATP"), capture_output=True, text=True)
         assert res.returncode != 0 and "cannot resume" in res.stderr, res.stderr[-800:]
         assert hashlib.sha256(log.read_bytes()).hexdigest() == before
+
+
+def test_resume_keeps_the_scoring_mode():
+    """--score-nucleotide-only changes what selection acts on, so a run cannot continue in the other mode."""
+    with tempfile.TemporaryDirectory(prefix="ames_scoremode_") as tmp:
+        out = Path(tmp) / "run01"
+        nuc_only = ("--score-nucleotide-only",)
+        res = subprocess.run(_ames_cmd(out, extra=nuc_only, ng=6), capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr[-2000:]
+        assert "#scoring: ligand contacts and interface pLDDT on chain B only (ames default: B,C)" in res.stderr
+        assert re.search(r"#--ligand_chains\s+= B\n", (out / "progress.log").read_text())
+        before = hashlib.sha256((out / "progress.log").read_bytes()).hexdigest()
+
+        # the same mode continues (nothing left to do) ...
+        res = subprocess.run(_ames_cmd(out, extra=nuc_only, ng=6), capture_output=True, text=True)
+        assert res.returncode == 0 and "0 generation(s) left" in res.stdout, res.stderr[-800:]
+        # ... the other one is refused, in both directions, and the log is not touched
+        res = subprocess.run(_ames_cmd(out, ng=6), capture_output=True, text=True)
+        assert res.returncode != 0 and "cannot resume" in res.stderr and "--score-nucleotide-only" in res.stderr, res.stderr[-800:]
+        assert hashlib.sha256((out / "progress.log").read_bytes()).hexdigest() == before
+
+        pooled = Path(tmp) / "run02"
+        res = subprocess.run(_ames_cmd(pooled, ng=6), capture_output=True, text=True)
+        assert res.returncode == 0 and "#scoring" not in res.stderr, res.stderr[-800:]
+        assert re.search(r"#--ligand_chains\s+= B,C\n", (pooled / "progress.log").read_text())
+        res = subprocess.run(_ames_cmd(pooled, extra=nuc_only, ng=6), capture_output=True, text=True)
+        assert res.returncode != 0 and "cannot resume" in res.stderr, res.stderr[-800:]
+
+
+def test_score_nucleotide_only_needs_a_ligand():
+    with tempfile.TemporaryDirectory(prefix="ames_noligand_") as tmp:
+        cmd = [sys.executable, str(HERE / "mock_ames.py"), "--alphabet", "GADVP", "--score-nucleotide-only",
+               "--iseq1", "protein:randoms:30:evolv", "-ps", "4", "-ng", "3", "--engine", "esmfold2",
+               "-o", str(Path(tmp) / "run01")]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        assert res.returncode != 0 and "--score-nucleotide-only needs --ligand" in res.stderr, res.stderr[-800:]
 
 
 if __name__ == "__main__":

@@ -36,6 +36,8 @@
 #             ENV_ACTIVATE='any command that activates the env'
 #             CONDA_ENV=name [with CONDA_SH=/path/to/conda.sh, default: the MSI anaconda's]
 #             With no env active and none given: CONDA_SH + environment "esmfold2".
+#   Scoring   SCORE_LIGANDS [all] ames pools every ligand chain in its ligand terms (lcd, ipLDDT), so in an
+#             NUC,ION run contacts with the ion alone are rewarded; "nucleotide" scores the nucleotide only
 #   Hub       HF_OFFLINE [1] jobs run with HF_HUB_OFFLINE=1: every Hugging Face file must already be
 #             cached (python fetch_hub_files.py on a login node; 0 = allow downloads, which the
 #             hub rate-limits on shared IPs)   CCD_PATH [unset] path of a ccd.pkl, becomes ESMCFOLD_CCD_PATH
@@ -112,6 +114,7 @@ MINLEN="${MINLEN:-}"
 MUT="${MUT:-npm}"
 CKPI="${CKPI:-1}"
 HF_OFFLINE="${HF_OFFLINE:-1}"
+SCORE_LIGANDS="${SCORE_LIGANDS:-all}"
 CCD_PATH="${CCD_PATH:-${ESMCFOLD_CCD_PATH:-}}"   # ESMCFOLD_CCD_PATH in your shell works too
 BETA0="${BETA0:-0.8}"
 BETAT="${BETAT:-8.0}"
@@ -142,6 +145,11 @@ if [[ -n "$CCD_PATH" && ! -f "$CCD_PATH" ]]; then
     echo "ERROR: CCD_PATH / ESMCFOLD_CCD_PATH is set to '$CCD_PATH', which is not a file" >&2
     exit 1
 fi
+case "$SCORE_LIGANDS" in
+    all)        SCORE_FLAG="" ;;
+    nucleotide) SCORE_FLAG="--score-nucleotide-only" ;;
+    *) echo "SCORE_LIGANDS must be all or nucleotide" >&2; exit 1 ;;
+esac
 HF_OFFLINE_LINE=""
 [[ "$HF_OFFLINE" == "1" ]] && HF_OFFLINE_LINE="export HF_HUB_OFFLINE=1   # files come from the local cache: no network, no rate limit"
 CCD_LINE=""
@@ -167,6 +175,11 @@ manifest_text() {   # row N (0-based) is array index N
 
 length_warnings() {
     [[ "$MUT" == "npm" ]] && echo "WARNING: MUT=npm includes '%' (delete a chunk) and 'r' (replace the chain by 3-5 random residues). In the MSI smoke test a single '%' took 65-residue chains to 7 and 10 residues in generations 1-2 (see README: Chain length). MUT=pmo avoids this."
+    local ion has_ion=0
+    for ion in $CATIONS; do [[ "$ion" != "none" ]] && has_ion=1; done
+    if [[ "$SCORE_LIGANDS" == "all" && "$has_ion" == 1 ]]; then
+        echo "NOTE: SCORE_LIGANDS=all: ames pools the ion into the ligand terms, so a protein that binds only the ion is rewarded (in the pilot, GADVP's whole ligand score was Mg contacts, none with ATP). SCORE_LIGANDS=nucleotide scores the nucleotide only."
+    fi
     [[ -z "$MINLEN" ]] && echo "WARNING: no MINLEN, so nothing opposes short chains. MINLEN=50 is a reasonable floor for a 65-residue start."
     return 0
 }
@@ -245,7 +258,7 @@ ${CCD_LINE}
 SCRIPTS="${HERE}"
 WORKDIR="${WORKDIR}"
 MANIFEST="${MANIFEST}"
-PS="${PS}"; NG="${NG}"; LEN0="${LEN0}"; MAXLEN="${MAXLEN}"; MINLEN="${MINLEN}"; MUT="${MUT}"; CKPI="${CKPI}"
+PS="${PS}"; NG="${NG}"; LEN0="${LEN0}"; MAXLEN="${MAXLEN}"; MINLEN="${MINLEN}"; MUT="${MUT}"; CKPI="${CKPI}"; SCORE_FLAG="${SCORE_FLAG}"
 SEL_ARGS="${SEL_ARGS}"
 HEAD
 cat <<'BODY'
@@ -277,7 +290,7 @@ python "$SCRIPTS/run_ames_alphabet.py" --alphabet "$ALPHABET" --resume \
     --ligand "$LIGAND" \
     -pm1 "$MUT" --seq1_max_len "$MAXLEN" ${MINLEN:+--seq1_min_len "$MINLEN"} \
     -ps "$PS" -ng "$NG" -ckpi "$CKPI" $SEL_ARGS \
-    --engine esmfold2 \
+    ${SCORE_FLAG} --engine esmfold2 \
     -o "$OUTDIR"
 
 visualames -l "$OUTDIR/progress.log"

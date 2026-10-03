@@ -2,7 +2,8 @@
 
 The protein is an ideal helical backbone (N, CA, C, O, CB) with the sequence's
 residue names; the nucleotide (ATP or GTP) is the CCD template (biotite ships it
-offline) pressed against the helix; the ion sits 2.1 A from a beta-phosphate oxygen.
+offline) pressed against the helix; the ion sits 2.1 A from a beta-phosphate oxygen
+(or, with ``ion_on_protein``, on the far side of the helix: touching residues, not the nucleotide).
 Written in the layout ames' cif2pdb produces, B-factor = pLDDT.
 """
 import numpy as np
@@ -57,8 +58,11 @@ def nucleotide_template(nucleotide: str = "ATP") -> list:
 
 
 def build_complex(seq: str, ion: str = "", nucleotide: str = "ATP", plddt: float = 80.0,
-                  nuc_plddt: float = 75.0, min_gap: float = 3.2) -> str:
-    """PDB text: chain A protein, chain B nucleotide, chain C `ion` (CCD code, optional)."""
+                  nuc_plddt: float = 75.0, min_gap: float = 3.2, ion_on_protein: bool = False) -> str:
+    """PDB text: chain A protein, chain B nucleotide, chain C `ion` (CCD code, optional).
+
+    ion_on_protein: put the ion 2.4 A from the CA of residue 4, on the side of the helix away from the
+    nucleotide, so it contacts protein residues and no nucleotide atom (an ion-only "binder")."""
     bb = helix_backbone(len(seq))
     prot_xyz = np.array([x for r in bb for x in r])
     centre = np.array([r[1] for r in bb]).mean(axis=0)
@@ -90,6 +94,8 @@ def build_complex(seq: str, ion: str = "", nucleotide: str = "ATP", plddt: float
         names = [n for n, _, _ in nuc]
         o2b, pb = moved[names.index("O2B")], moved[names.index("PB")]
         pos = o2b + 2.1 * (o2b - pb) / np.linalg.norm(o2b - pb)
+        if ion_on_protein:
+            pos = bb[min(3, len(seq) - 1)][1] - 2.4 * perp
         serial += 1
         lines.append(_fmt(serial, "HETATM", ion, ion, "C", 1, pos, nuc_plddt, ion[:1] + ion[1:].lower()))
     return "\n".join(lines) + "\nEND\n"

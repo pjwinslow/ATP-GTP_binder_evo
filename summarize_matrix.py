@@ -199,6 +199,10 @@ def run_row(run_dir: Path, args):
         "alphabet": "ALL20" if alphabet == "uniform" else alphabet.replace("-raw", ""),
         "cation": ions[0] if ions else "none",
         "ligand": ",".join(ligands),
+        # what ames' ligand terms (lcd, interface pLDDT) counted: ligand_chains is B (nucleotide only, also the
+        # only chain when there is no ion) or B,C (nucleotide and ion pooled)
+        "ligand_scoring": "nucleotide+ion" if ions and len(str(header.get("ligand_chains", "")).split(",")) > 1
+                          else "nucleotide",
         "generations": int(last["gndx"]),
         "seq": seq,
         "seq_len": len(seq),
@@ -444,6 +448,12 @@ def main() -> None:
     plot_final(runs, out / "final_metrics.png")
     plot_trajectories(runs, out / "trajectories.png")
 
+    with_ion = runs[runs.cation != "none"]
+    if with_ion.ligand_scoring.nunique() > 1:  # only runs with an ion differ in how they were scored
+        print("WARNING: runs with a cation were scored differently (ligand_scoring: nucleotide only for "
+              f"{(with_ion.ligand_scoring == 'nucleotide').sum()}, nucleotide+ion pooled for "
+              f"{(with_ion.ligand_scoring == 'nucleotide+ion').sum()}); they are mixed in conditions.csv and the "
+              "figures, summarise them separately.")
     bad = runs[~runs.alphabet_ok]
     if len(bad):
         print(f"WARNING: {len(bad)} run(s) have final residues outside their alphabet:\n{bad.run.to_string(index=False)}")
