@@ -48,7 +48,9 @@ it with `python check_env.py`, and submit from that same shell. `bash submit_mat
 prints the exact activation command it will use (`environment: …`). To use something else:
 `CONDA_ENV=name` (looked up in the MSI anaconda; `CONDA_SH=/path/to/conda.sh` for another
 conda) or `ENV_ACTIVATE='any command'`. If the activation fails the job stops with an error,
-instead of running on whatever `python` happens to be on the path. The environment needs
+instead of running on whatever `python` happens to be on the path. A shell whose prompt
+shows `(base)` is refused (`ERROR: … is 'base'`): conda's base environment has no ames or
+esm (MSI's is Python 3.8), so every task would fail within seconds. The environment needs
 ames and biopython on top of ESMFold2. If you add
 them to a **copy** of the environment you protect it from ames' `numpy>=2.0` pin, which
 can break a torch build made against numpy 1.x:

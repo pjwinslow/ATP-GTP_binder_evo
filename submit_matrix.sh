@@ -36,6 +36,7 @@
 #             ENV_ACTIVATE='any command that activates the env'
 #             CONDA_ENV=name [with CONDA_SH=/path/to/conda.sh, default: the MSI anaconda's]
 #             With no env active and none given: CONDA_SH + environment "esmfold2".
+#             An active conda "base" is refused (it has no ames/esm): activate esmfold2 first.
 #   Scoring   SCORE_LIGANDS [all] ames pools every ligand chain in its ligand terms (lcd, ipLDDT), so in an
 #             NUC,ION run contacts with the ion alone are rewarded; "nucleotide" scores the nucleotide only
 #   Hub       HF_OFFLINE [1] jobs run with HF_HUB_OFFLINE=1: every Hugging Face file must already be
@@ -82,6 +83,15 @@ if [[ -n "${ENV_ACTIVATE:-}" ]]; then
 elif [[ -n "${CONDA_ENV:-}" ]]; then
     ENV_ACTIVATE="source ${CONDA_SH} && conda activate ${CONDA_ENV}"
     ENV_SOURCE="CONDA_ENV=${CONDA_ENV}"
+elif [[ "${CONDA_DEFAULT_ENV:-}" == "base" ]] || {
+        # conda's base environment is the root of the installation itself (<root>/etc/profile.d/conda.sh)
+        [[ -n "${CONDA_PREFIX:-}" && "${CONDA_PREFIX}" != */envs/* && -f "${CONDA_PREFIX}/etc/profile.d/conda.sh" ]]
+    }; then
+    # Jobs inherit this shell's environment, and base has neither ames nor esm (on MSI it is python 3.8),
+    # so every task would fail in seconds. Reported below, once --status has had its chance to run.
+    ENV_ACTIVATE="false"
+    ENV_SOURCE="conda base"
+    ENV_PROBLEM="the conda environment active in this shell is 'base' (${CONDA_PREFIX:-unknown}), which has no ames or esm: every task would fail within seconds. Run 'conda activate esmfold2' first, or give CONDA_ENV=<name> or ENV_ACTIVATE='<command that activates it>'."
 elif [[ -n "${CONDA_PREFIX:-}" ]] && {
         # The environment active in this shell, activated through the conda installation that owns it:
         # <root>/envs/<name> belongs to <root>. CONDA_EXE is only the fallback (for environments created
@@ -191,6 +201,11 @@ if [[ $STATUS == 1 ]]; then
         if [[ -d "$ARRAY_ARG" ]]; then target="${ARRAY_ARG%/}/manifest.tsv"; else target="$ARRAY_ARG"; fi
     fi
     exec python3 "$HERE/run_status.py" "$target"
+fi
+
+if [[ -n "${ENV_PROBLEM:-}" ]]; then
+    echo "ERROR: ${ENV_PROBLEM}" >&2
+    exit 1
 fi
 
 N_RUNS=$(( $(manifest_text | wc -l) - 1 ))

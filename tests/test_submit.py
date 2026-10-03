@@ -39,7 +39,8 @@ def _setup(tmp: Path):
 
 def _run(args, env_extra, path, cwd):
     # blank the conda variables so the result does not depend on the shell running the tests
-    env = {**os.environ, "CONDA_PREFIX": "", "CONDA_EXE": "", "CONDA_ENV": "", "ESMCFOLD_CCD_PATH": "", "CCD_PATH": "",
+    env = {**os.environ, "CONDA_PREFIX": "", "CONDA_EXE": "", "CONDA_ENV": "", "CONDA_DEFAULT_ENV": "",
+           "ESMCFOLD_CCD_PATH": "", "CCD_PATH": "",
            "PATH": path, "WORKDIR": str(cwd), **env_extra}
     return subprocess.run(["bash", str(SUBMIT), *args], env=env, capture_output=True, text=True, cwd=cwd)
 
@@ -218,6 +219,21 @@ def test_environment_selection_and_failed_activation():
         # no conda.sh can be found for the active environment: the MSI default, not a broken command
         out = _run([], {**base, "CONDA_PREFIX": "/nowhere/envs/x", "CONDA_EXE": "/nowhere/bin/conda"}, path, work).stdout
         assert "/common/software" in out and "conda activate esmfold2" in out and "/nowhere" not in out
+
+        # conda's base (the root of an installation) has neither ames nor esm: refuse to plan or submit with it,
+        # whether CONDA_DEFAULT_ENV says so or only the prefix does, but still allow --status and explicit choices
+        for baseenv in ({"CONDA_PREFIX": str(other), "CONDA_DEFAULT_ENV": "base", "CONDA_EXE": str(other / "bin/conda")},
+                        {"CONDA_PREFIX": str(mini), "CONDA_DEFAULT_ENV": "", "CONDA_EXE": ""}):
+            for args in ([], ["--submit"]):
+                res = _run(args, {**base, **baseenv}, path, work)
+                assert res.returncode == 1 and "environment active in this shell is 'base'" in res.stderr, res.stderr
+                assert "conda activate esmfold2" in res.stderr and not res.stdout.count("environment:")
+            assert not (bindir / "captured").exists()  # nothing was submitted
+            status = _run(["--status"], {**base, **baseenv}, path, work)  # needs only python3, and there is no manifest yet
+            assert "no manifest" in status.stderr and "'base'" not in status.stderr, status.stderr
+            for explicit in ({"CONDA_ENV": "esmfold2"}, {"ENV_ACTIVATE": "module load x"}):
+                res = _run([], {**base, **baseenv, **explicit}, path, work)
+                assert res.returncode == 0 and "environment:" in res.stdout, res.stderr
 
         # CONDA_ENV names an environment in the MSI conda instead
         out = _run([], {**base, **active, "CONDA_ENV": "other"}, path, work).stdout
