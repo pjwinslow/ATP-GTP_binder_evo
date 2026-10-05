@@ -170,6 +170,16 @@ def test_submit_and_run_job_body():
         out = Path(base["OUTROOT"] + "_smoke")
         assert (out / "GADVP/ATP/run01/DONE").exists() and (out / "GADVP/GTP_MG/run01/DONE").exists()
         assert (out / "GADVP/GTP_MG/run01/lineage.tsv").exists()
+        # KEEP=slim (the default): seven files per run and no structures/ directory on the shared file system
+        for run in ("GADVP/ATP/run01", "GADVP/GTP_MG/run01"):
+            kept = sorted(p.name for p in (out / run).rglob("*"))
+            assert kept == sorted(["progress.log", "progress.ckp", "lineage.tsv", "Summary.png",
+                                   "Lineage_summary.png", "final.pdb", "DONE"]), kept
+        assert "ATOM" in (out / "GADVP/GTP_MG/run01/final.pdb").read_text()
+        # ... and the summarizer needs nothing more than that
+        res = subprocess.run([sys.executable, str(ROOT / "summarize_matrix.py"), str(out), "--out", str(tmp / "summary")],
+                             capture_output=True, text=True)
+        assert res.returncode == 0 and (tmp / "summary/runs.csv").exists(), res.stdout[-800:] + res.stderr[-1500:]
         header = (out / "GADVP/GTP_MG/run01/progress.log").read_text().split("gndx\t")[0]
         assert "#--ligand                   = ['GTP', 'MG']" in header and "protein_alphabet1        = GADVP" in header
 
@@ -293,6 +303,70 @@ def test_min_length_reaches_ames():
         header = (tmp / "out_smoke/GADVP/ATP/run01/progress.log").read_text().split("gndx\t")[0]
         assert re.search(r"#--seq1_min_len\s+= 30", header), header[:2000]
         assert re.search(r"#--seq1_max_len\s+= 160", header)
+
+
+def test_keep_full_and_the_file_estimate():
+    with tempfile.TemporaryDirectory(prefix="ames_keep_") as t:
+        tmp = Path(t)
+        bindir, path = _setup(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        env = {"OUTROOT": str(tmp / "out"), "ALPHABETS": "GADVP", "NUCLEOTIDES": "ATP", "CATIONS": "none MG",
+               "REPS": "1", "SMOKE": "1", "ENV_ACTIVATE": "true"}
+
+        # the plan says how many files to expect: 2 runs x (7 + 2 logs) + manifest, or up to NG + 6 per run
+        plan = _run([], env, path, work).stdout
+        assert "files:       7 per run (KEEP=slim), plus 2 Slurm logs per task and the manifest: about 19 in all" in plan, plan
+        plan = _run([], {**env, "KEEP": "full"}, path, work).stdout
+        assert "up to 18 per run (KEEP=full" in plan and "about 41 in all" in plan, plan  # NG=12 in the smoke test
+        res = _run(["--submit"], {**env, "KEEP": "most"}, path, work)
+        assert res.returncode != 0 and "KEEP must be slim or full" in res.stderr
+
+        assert _run(["--submit"], {**env, "KEEP": "full"}, path, work).returncode == 0
+        job = _job_scripts(bindir)[-1].read_text()
+        assert 'KEEP="full"' in job
+        body = "\n".join(line for line in job.splitlines() if "check_env.py" not in line)
+        script = tmp / "job.sh"
+        script.write_text(body.replace("/run_ames_alphabet.py", "/tests/mock_ames.py"))
+        res = subprocess.run(["bash", str(script)], capture_output=True, text=True, cwd=work,
+                             env={**os.environ, "PATH": path, "SLURM_ARRAY_TASK_ID": "0", "SLURM_JOB_ID": "5"})
+        assert res.returncode == 0, res.stdout[-1200:] + res.stderr[-2000:]
+        run = tmp / "out_smoke/GADVP/ATP/run01"
+        assert (run / "bestlog.tsv").exists() and len(list((run / "structures").glob("*.pdb"))) > 1
+        assert not (run / "final.pdb").exists()  # full mode is visualames' own layout
+
+
+def test_slim_cleans_up_after_itself():
+    """The node-local scratch directory is removed, also when the run fails after visualames started."""
+    with tempfile.TemporaryDirectory(prefix="ames_slim_") as t:
+        tmp = Path(t)
+        bindir, path = _setup(tmp)
+        work = tmp / "work"
+        work.mkdir()
+        scratch = tmp / "node_tmp"
+        scratch.mkdir()
+        env = {"OUTROOT": str(tmp / "out"), "ALPHABETS": "GADVP", "NUCLEOTIDES": "ATP", "CATIONS": "none",
+               "SMOKE": "1", "ENV_ACTIVATE": "true"}
+        assert _run(["--submit"], env, path, work).returncode == 0
+        job = _job_scripts(bindir)[-1].read_text()
+        body = "\n".join(line for line in job.splitlines() if "check_env.py" not in line)
+        script = tmp / "job.sh"
+        script.write_text(body.replace("/run_ames_alphabet.py", "/tests/mock_ames.py"))
+        run_env = {**os.environ, "PATH": path, "SLURM_ARRAY_TASK_ID": "0", "SLURM_JOB_ID": "6", "TMPDIR": str(scratch)}
+        res = subprocess.run(["bash", str(script)], capture_output=True, text=True, cwd=work, env=run_env)
+        assert res.returncode == 0, res.stderr[-2000:]
+        assert list(scratch.iterdir()) == []  # visualames' scratch directory (with the structures/) is gone
+
+        # a failing visualames must not leave the scratch behind and must not mark the run done
+        bad = tmp / "bin_bad"
+        bad.mkdir()
+        (bad / "visualames").write_text("#!/bin/bash\nmkdir -p \"$4/structures\"; touch \"$4/structures/0001.pdb\"; exit 3\n")
+        (bad / "visualames").chmod(0o755)
+        (tmp / "out_smoke/GADVP/ATP/run01/DONE").unlink()
+        res = subprocess.run(["bash", str(script)], capture_output=True, text=True, cwd=work,
+                             env={**run_env, "PATH": f"{bad}{os.pathsep}{path}"})
+        assert res.returncode == 3 and not (tmp / "out_smoke/GADVP/ATP/run01/DONE").exists()
+        assert list(scratch.iterdir()) == []
 
 
 def test_score_ligands_setting():

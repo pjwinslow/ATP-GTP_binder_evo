@@ -137,10 +137,51 @@ logs in `logs/`. Override any of them with environment variables (see the header
    would change that file is refused.
 
    Outputs: `outputs/nuc_matrix/<alphabet>/<ATP|ATP_MG|GTP|GTP_MG>/runNN/` (neutral
-   control: `outputs/nuc_matrix_neutral/…`; smoke test: `…_smoke`). Each `progress.log`
-   embeds a compressed structure per row and gets large; keep outputs on scratch. A task
-   ends with `visualames` (writes `lineage.tsv`, `structures/` and plots next to the log)
-   and a `DONE` marker file.
+   control: `outputs/nuc_matrix_neutral/…`; smoke test: `…_smoke`). A task ends with
+   `visualames` and a `DONE` marker file; see [Files and disk use](#files-and-disk-use)
+   for what is left in each run directory.
+
+### Files and disk use
+
+`visualames` writes one PDB per member of the final lineage (`structures/NNNN.pdb`, up to
+`NG` of them), which at `NG=1000` is thousands of files over a matrix. The jobs therefore
+run it on the node's local disk (`$TMPDIR`) and copy back only what the analysis needs
+(`KEEP=slim`, the default):
+
+| per run directory | |
+|---|---|
+| `progress.log` | the whole trajectory, one compressed structure per row (the only large file) |
+| `progress.ckp` | the checkpoint (the last selected population) |
+| `lineage.tsv` | the lineage of the final sequence, with a compressed structure per row; what `summarize_matrix.py` reads |
+| `Summary.png`, `Lineage_summary.png` | the plots from `visualames` |
+| `final.pdb` | the final structure, for a viewer |
+| `DONE` | marker |
+
+That is 7 files per run, so the 48-run matrix is a few hundred files including the Slurm
+logs (2 per task) and the manifest; directories count too, about one per run. `bash
+submit_matrix.sh` prints the expected total. `KEEP=full` restores `visualames`' own layout
+(`bestlog.tsv` and `structures/`). Do not use `visualames --nostr`: in the ames version
+pinned here it writes a fixed `/tmp/tmp_progress_nopdb.log` shared by all jobs on a node
+and drops the `structure` column that `lineage.tsv` needs.
+
+Size is the other axis: `progress.log` holds `PS × NG` rows with a structure each, so a
+full-size run is on the order of a gigabyte. Measure it on a pilot before sizing the matrix:
+
+```bash
+find outputs/pilot -type f | wc -l                 # files (add -type d for directories)
+du -sh outputs/pilot/*/*/*                         # size per run
+# runs made before KEEP existed: the structures/ folders are redundant (lineage.tsv has them)
+find outputs -type d -name structures -prune -exec rm -rf {} +
+```
+When the analysis is finished, `progress.log` is the file to shrink: the summarizer reads
+only `lineage.tsv` and the `#--` header lines of `progress.log` (checked on the mock runs),
+so the body can go. This discards the population trajectory and every structure that is not
+on a final lineage, and `visualames` cannot be re-run afterwards, so do it only once you
+are sure; summarize first.
+
+```bash
+for f in outputs/pilot/*/*/*/progress.log; do grep '^#' "$f" > "$f.hdr" && mv "$f.hdr" "$f"; done
+```
 
 ### Preemption and resume
 

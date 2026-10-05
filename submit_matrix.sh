@@ -39,6 +39,9 @@
 #             An active conda "base" is refused (it has no ames/esm): activate esmfold2 first.
 #   Scoring   SCORE_LIGANDS [all] ames pools every ligand chain in its ligand terms (lcd, ipLDDT), so in an
 #             NUC,ION run contacts with the ion alone are rewarded; "nucleotide" scores the nucleotide only
+#   Files     KEEP [slim] files kept per run: slim = progress.log, progress.ckp, lineage.tsv, the two
+#             summary plots, final.pdb and DONE (7); full = visualames' own output, which adds
+#             bestlog.tsv and one structures/NNNN.pdb per lineage member (up to NG more files per run)
 #   Hub       HF_OFFLINE [1] jobs run with HF_HUB_OFFLINE=1: every Hugging Face file must already be
 #             cached (python fetch_hub_files.py on a login node; 0 = allow downloads, which the
 #             hub rate-limits on shared IPs)   CCD_PATH [unset] path of a ccd.pkl, becomes ESMCFOLD_CCD_PATH
@@ -125,6 +128,7 @@ MUT="${MUT:-npm}"
 CKPI="${CKPI:-1}"
 HF_OFFLINE="${HF_OFFLINE:-1}"
 SCORE_LIGANDS="${SCORE_LIGANDS:-all}"
+KEEP="${KEEP:-slim}"
 CCD_PATH="${CCD_PATH:-${ESMCFOLD_CCD_PATH:-}}"   # ESMCFOLD_CCD_PATH in your shell works too
 BETA0="${BETA0:-0.8}"
 BETAT="${BETAT:-8.0}"
@@ -159,6 +163,10 @@ case "$SCORE_LIGANDS" in
     all)        SCORE_FLAG="" ;;
     nucleotide) SCORE_FLAG="--score-nucleotide-only" ;;
     *) echo "SCORE_LIGANDS must be all or nucleotide" >&2; exit 1 ;;
+esac
+case "$KEEP" in
+    slim|full) ;;
+    *) echo "KEEP must be slim or full" >&2; exit 1 ;;
 esac
 HF_OFFLINE_LINE=""
 [[ "$HF_OFFLINE" == "1" ]] && HF_OFFLINE_LINE="export HF_HUB_OFFLINE=1   # files come from the local cache: no network, no rate limit"
@@ -217,6 +225,9 @@ if [[ $SUBMIT == 0 ]]; then
     echo "ccd.pkl:     ${CCD_PATH:-from the Hugging Face cache (python fetch_hub_files.py)}"
     echo "chain length: start ${LEN0}, limits ${MINLEN:-none}..${MAXLEN} (soft), mutations: ${MUT}"
     length_warnings
+    if [[ "$KEEP" == "slim" ]]; then per_run=7; per_run_note="7 per run (KEEP=slim)"
+    else per_run=$((NG + 6)); per_run_note="up to $((NG + 6)) per run (KEEP=full: one PDB per lineage member)"; fi
+    echo "files:       ${per_run_note}, plus 2 Slurm logs per task and the manifest: about $((N_RUNS * (per_run + 2) + 1)) in all"
     echo "$N_RUNS runs planned: PS=$PS NG=$NG, $PARTITION, $GPUS, $MEM, $TIME, up to $MAX_PARALLEL at once."
     echo "Nothing submitted. Add --submit to submit; --status shows progress afterwards."
     exit 0
@@ -273,7 +284,7 @@ ${CCD_LINE}
 SCRIPTS="${HERE}"
 WORKDIR="${WORKDIR}"
 MANIFEST="${MANIFEST}"
-PS="${PS}"; NG="${NG}"; LEN0="${LEN0}"; MAXLEN="${MAXLEN}"; MINLEN="${MINLEN}"; MUT="${MUT}"; CKPI="${CKPI}"; SCORE_FLAG="${SCORE_FLAG}"
+PS="${PS}"; NG="${NG}"; LEN0="${LEN0}"; MAXLEN="${MAXLEN}"; MINLEN="${MINLEN}"; MUT="${MUT}"; CKPI="${CKPI}"; SCORE_FLAG="${SCORE_FLAG}"; KEEP="${KEEP}"
 SEL_ARGS="${SEL_ARGS}"
 HEAD
 cat <<'BODY'
@@ -308,7 +319,23 @@ python "$SCRIPTS/run_ames_alphabet.py" --alphabet "$ALPHABET" --resume \
     ${SCORE_FLAG} --engine esmfold2 \
     -o "$OUTDIR"
 
-visualames -l "$OUTDIR/progress.log"
+if [[ "$KEEP" == "full" ]]; then
+    visualames -l "$OUTDIR/progress.log"
+else
+    # visualames writes one PDB per lineage member (up to NG files per run). Make them on the node's local
+    # disk and keep only the lineage table (it holds every structure, compressed), the two summary plots and
+    # the final structure, so a run leaves 7 files on the shared file system instead of up to NG + 7.
+    VIS="$(mktemp -d "${TMPDIR:-/tmp}/visualames_XXXXXX")"
+    trap 'rm -rf "$VIS"' EXIT
+    visualames -l "$OUTDIR/progress.log" -o "$VIS"
+    cp "$VIS/lineage.tsv" "$OUTDIR/"
+    for plot in Summary.png Lineage_summary.png; do
+        if [[ -f "$VIS/$plot" ]]; then cp "$VIS/$plot" "$OUTDIR/"; fi
+    done
+    FINAL="$(ls "$VIS/structures" 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "$FINAL" ]]; then cp "$VIS/structures/$FINAL" "$OUTDIR/final.pdb"; fi
+    rm -rf "$VIS"
+fi
 touch "$OUTDIR/DONE"
 echo "Task $SLURM_ARRAY_TASK_ID finished successfully"
 BODY
